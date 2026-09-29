@@ -16,6 +16,7 @@ extern uint32_t frameCount;
 uint32_t frame_ms(void);
 void     pump_frame(void);        /* wait VSYNC, service audio, scroll bg */
 
+void init_mouse_sprite(void);
 void init_screen(void);
 void load_assets(void);
 void set_background(uint8_t tile_id);

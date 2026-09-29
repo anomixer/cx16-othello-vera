@@ -244,6 +244,14 @@ Music is streamed through a single 512-byte buffer and advanced by the VERA
 VSYNC at ~60 Hz, including while tilemap work is in flight, so disk loading
 never changes the tempo.
 
+### 3.12 16-bit scroll registers
+
+The Apple II `mos-apple2e-clang` compiler defines `unsigned int` as 16-bit. VERA's scroll registers (`HSCROLL_L`/`HSCROLL_H` and `VSCROLL_L`/`VSCROLL_H`) are 12-bit, spanning two bytes. If the C struct defines `hscroll` and `vscroll` as `unsigned char`, writing to `vscroll` maps to `HSCROLL_H` (offset 4) instead of `VSCROLL_L` (offset 5). The layer structs in `apple2e.h` must declare them as `unsigned int` so they properly map to offsets 3+4 and 5+6 to ensure diagonal scrolling works.
+
+### 3.13 Mouse pointer sprite is not automatic
+
+The Commander X16 kernal automatically reads the mouse hardware and assigns an empty sprite (Sprite 0) with a hardware pointer graphic. The Apple II VERA has no such kernal. The game must manually load a mouse pointer tile into VRAM (e.g., at `$B000`), map Sprite 0 to it with `assign_sprite()`, set its z-depth, and poll the Apple Mouse Card (`buttons & 0x80` for the primary button) to move it.
+
 ---
 
 ## 🛠️ 4. Build System

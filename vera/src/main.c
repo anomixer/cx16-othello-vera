@@ -29,7 +29,7 @@ int main(void) {
 
     audio_init();
     input_init();
-    set_mouse_pointer(TILE_MOUSE_CURSOR);
+    init_mouse_sprite();
 
     audio_start_music();
 

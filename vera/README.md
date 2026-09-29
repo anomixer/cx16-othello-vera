@@ -136,6 +136,8 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   screen, so `init_screen()` only sets `hscale`/`vscale`.
 * **Tile size.** The tile-height field only encodes 8×8 and 16×16 on this
   implementation; `$03` in the tilebase register selects 16×16.
+* **16-bit scroll registers.** VERA's scroll registers are 12-bit (L and H). In the C layer structs (`apple2e.h`), `hscroll` and `vscroll` must be defined as 16-bit `unsigned int`, otherwise `vscroll` will map to `HSCROLL_H` instead of `VSCROLL_L` and break diagonal scrolling.
+* **Mouse pointer sprite is not automatic.** The Apple II VERA lacks the X16 kernal that automatically updates Sprite 0. The game manually loads a hand cursor into VRAM, assigns it to Sprite 0, sets its z-depth, and polls the Apple Mouse Card.
 * **Layer compositing.** Colour index 0 is transparent for both tile layers,
   which is what the original relies on for its "transparent foreground"
   (`clear_foreground()`).

@@ -15,6 +15,7 @@
 #include "input.h"
 
 uint8_t helppage = 0;
+static uint8_t mouse_was_down = 0;
 
 /**
  * @brief Show game title screen
@@ -44,9 +45,24 @@ void game_title(void) {
     write_string("(ENTER) START", 14, 0);
 
     for (;;) {
+        int16_t k;
         pump_frame();
 
-        switch (input_key()) {
+        if (input_mouse_present()) {
+            int16_t mx, my;
+            uint8_t buttons;
+            input_mouse(&mx, &my, &buttons);
+            if ((buttons & 0x80) && !mouse_was_down) {
+                uint8_t row = (uint8_t)(my >> 4);
+                if (row == 11) { gamestate = GAME_SETTINGS; mouse_was_down = 1; return; }
+                if (row == 12) { gamestate = GAME_HELP; mouse_was_down = 1; return; }
+                if (row >= 14) { gamestate = GAME_RUN; init_game(); mouse_was_down = 1; return; }
+            }
+            mouse_was_down = (buttons & 0x80) ? 1 : 0;
+        }
+
+        k = input_key();
+        switch (k) {
             case 'S':
                 gamestate = GAME_SETTINGS;
                 return;
@@ -88,9 +104,27 @@ void game_help(void) {
     write_string(buf, 14, 17);
 
     for (;;) {
+        int16_t k;
         pump_frame();
 
-        switch (input_key()) {
+        if (input_mouse_present()) {
+            int16_t mx, my;
+            uint8_t buttons;
+            input_mouse(&mx, &my, &buttons);
+            if ((buttons & 0x80) && !mouse_was_down) {
+                uint8_t row = (uint8_t)(my >> 4);
+                uint8_t col = (uint8_t)(mx >> 4);
+                if (row == 13) {
+                    if (col < 10) { if (helppage < (HELPPAGES - 1)) helppage++; mouse_was_down = 1; return; }
+                    else { if (helppage > 0) helppage--; mouse_was_down = 1; return; }
+                }
+                if (row >= 14) { gamestate = GAME_MENU; mouse_was_down = 1; return; }
+            }
+            mouse_was_down = (buttons & 0x80) ? 1 : 0;
+        }
+
+        k = input_key();
+        switch (k) {
             case KEYCODE_ESCAPE:
                 gamestate = GAME_MENU;
                 return;
@@ -129,9 +163,31 @@ void game_settings(void) {
     print_choice();
 
     for (;;) {
+        int16_t k;
         pump_frame();
 
-        switch (input_key()) {
+        k = input_key();
+
+        if (input_mouse_present()) {
+            int16_t mx, my;
+            uint8_t buttons;
+            input_mouse(&mx, &my, &buttons);
+            if ((buttons & 0x80) && !mouse_was_down) {
+                uint8_t row = (uint8_t)(my >> 4);
+                if (row == 1) k = '1';
+                else if (row == 2) k = '2';
+                else if (row == 4) k = 'B';
+                else if (row == 6) k = 'S';
+                else if (row == 9) k = 'C';
+                else if (row == 10) k = 'V';
+                else if (row == 12) k = 'G';
+                else if (row == 13) k = 'M';
+                else if (row >= 14) k = KEYCODE_ESCAPE;
+            }
+            mouse_was_down = (buttons & 0x80) ? 1 : 0;
+        }
+
+        switch (k) {
             case '1':
                 player1_type = (player1_type == PLAYER_HUMAN ? PLAYER_CPU : PLAYER_HUMAN);
                 print_choice();

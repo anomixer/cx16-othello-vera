@@ -8,6 +8,7 @@
 #include "audio.h"
 #include "disk.h"
 #include "input.h"
+#include "mouse_hand.h"
 #include "asset_table.h"
 
 extern uint8_t background_scroll;
@@ -88,13 +89,26 @@ void init_screen(void) {
     VERA.display.video = 0x71;
 }
 
+void init_mouse_sprite(void) {
+    uint16_t i;
+    if (!input_mouse_present()) return;
+    
+    vera_set_addr(VERA_INC_1, 0xB000);
+    for (i = 0; i < sizeof(mouse_hand); i++) {
+        uint8_t p = mouse_hand[i], a = p >> 4, b = p & 15;
+        VERA.data0 = a == 11 ? 1 : a ? 0x51 : 0;
+        VERA.data0 = b == 11 ? 1 : b ? 0x51 : 0;
+    }
+    assign_sprite(SPRITE_MOUSE_CURSOR, 176);
+}
+
 void load_assets(void) {
     disk_copy_to_vram(ASSET_TILES_OFF,   TILEBASE,    ASSET_TILES_LEN,   0);
     disk_copy_to_vram(ASSET_FONT_OFF,    FONTBASE,    ASSET_FONT_LEN,    0);
     disk_copy_to_vram(ASSET_PALETTE_OFF, PALETTEBASE, ASSET_PALETTE_LEN, 1);
     disk_copy_to_ram(ASSET_HELP_OFF,     helpBuf,     ASSET_HELP_LEN);
     reset_sprites();
-    set_mouse_pointer(TILE_MOUSE_CURSOR);
+    init_mouse_sprite();
 }
 
 /* ------------------------------- tilemaps ------------------------------- */

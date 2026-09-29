@@ -412,12 +412,12 @@ void human_turn(void) {
     ccury = (int8_t)((my >> 4) - board_offset_y);
 
     if (ccurx >= 0 && ccurx < (int8_t)boardsize && ccury >= 0 && ccury < (int8_t)boardsize) {
-        if (buttons & 1) {
+        if (buttons & 0x80) {
             /* wait for the button to be released, keeping the frame alive */
             do {
                 pump_frame();
                 input_mouse(&mx, &my, &buttons);
-            } while (buttons != 0x00);
+            } while ((buttons & 0x80) != 0x00);
             place_stone((uint8_t)ccury, (uint8_t)ccurx, PROBE_NO, current_player);
         }
     }

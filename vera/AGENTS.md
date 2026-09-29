@@ -235,7 +235,7 @@ while (i < n && *s) { ... }
 
 `write_string()` is kept for NUL-terminated literals only.
 
-### 3.11 Audio: YM2151 FM → PSG
+### 3.11 Audio: YM2151 FM → PSG & Conversion Bug Fix
 
 The X16 original plays YM2151 FM music. The Apple II VERA has no FM operator
 path, so `tools/zsm2psg.py` re-voices the ZSM stream onto PSG voices 0–3
@@ -243,6 +243,12 @@ path, so `tools/zsm2psg.py` re-voices the ZSM stream onto PSG voices 0–3
 Music is streamed through a single 512-byte buffer and advanced by the VERA
 VSYNC at ~60 Hz, including while tilemap work is in flight, so disk loading
 never changes the tempo.
+
+**YM2151 Register Parsing Bug**: An earlier version of `zsm2psg.py` mistakenly mapped the YM2151 Pan/Algorithm register (`$20-$27`) as the Key Code register, and the Key Code register (`$28-$2F`) as Total Level. This caused the script to synthesize completely random frequencies (screeching/high pitches) derived from stereo pan data instead of musical notes. This was fixed by correctly parsing Key Code from `$28-$2F` and Total Level from `$60-$7F`.
+
+**MIDI & PSG Utilities**:
+- `tools/zsm2midi.py`: Added to extract YM2151 Key On events to a standard `.mid` file for testing alternate synthesis engines (e.g. `veramusic` tools).
+- `tools/psg_to_veramusic.py`: Added to convert the native Othello PSG format (which streams `0x80|reg, val` + delays) into the standard `veramusic` block-count PSG format so it can be previewed in `psgplay.exe`.
 
 ### 3.12 16-bit scroll registers
 

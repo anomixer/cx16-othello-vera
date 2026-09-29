@@ -90,10 +90,12 @@ def convert(src: Path, *, fm_channels=None, fm_wave=0x3F, fm_vol_scale=0.62,
                     break
                 reg, val = raw[ptr], raw[ptr + 1]
                 ptr += 2
-                if 0x28 <= reg <= 0x2F:
-                    tl[reg - 0x28] = val & 0x7F
-                elif 0x20 <= reg <= 0x27:
-                    kc[reg - 0x20] = val & 0x7F
+                if 0x60 <= reg <= 0x7F:
+                    # TL (Total Level). 4 operators per channel. We'll just take an average or min.
+                    # reg 0x60-0x67 (Op1), 0x68-0x6F (Op2), 0x70-0x77 (Op3), 0x78-0x7F (Op4)
+                    tl[reg & 0x07] = val & 0x7F
+                elif 0x28 <= reg <= 0x2F:
+                    kc[reg - 0x28] = val & 0x7F
                 elif reg == 0x08:
                     ch = val & 0x07
                     on = bool((val >> 3) & 0x0F)

@@ -580,6 +580,11 @@ and write to `C:/dev/cx16-othello/vera/build/headless/`.
     row clamp) and locked in by test 5, which decodes the rendered glyphs back
     against `font.bin` and diffs them against `help.bin`.
 
+18. **Struct alignment issue** — changing `apple2e.h` scroll registers to `unsigned int` caused 16-bit alignment padding, shifting VERA register offsets and causing random crashes. Reverted to 8-bit `hscroll_l`/`hscroll_h` assignments.
+19. **Mouse cursor disappearance** — `reset_sprites()` cleared sprite 1 to 127. When ESC was pressed to leave the game and return to the menu, the mouse cursor (Sprite 0) was accidentally cleared because the original X16 code expected Sprite 0 to be hardware-managed. Fixed `reset_sprites()` to preserve Sprite 0.
+20. **AI calculation freeze** — `human_turn()` repeatedly called `check_valid_move()` on every frame waiting for input. On a 1MHz CPU, this caused a 150ms delay per frame, making background scrolling choppy. Added `valid_move_checked` flag to only evaluate valid moves once per turn.
+21. **Mouse click as ENTER** — `end_game_state` did not support mouse clicks to return to the menu. Added bounds checking on mouse coordinates to treat clicks on the "hit ENTER" text area as a `KEYCODE_RETURN` event.
+
 ---
 
 ## ⚠️ 8. Known Constraints & Open Items

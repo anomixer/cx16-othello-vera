@@ -161,6 +161,7 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   `src/game.c` maps the vertical axis the other way; the joystick block matches.
   `othello_headless.test.ts` asserts all four directions against both `curx/cury`
   and the cursor sprite's pixel box.
+* **Mouse Interactions.** In addition to selecting a move, clicking the mouse cursor over the "hit ENTER to go to menu" text at the end of a game will simulate an ENTER keypress and return to the main menu.
 
 ## 5. Automated verification (headless)
 

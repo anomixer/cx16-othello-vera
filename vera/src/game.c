@@ -36,6 +36,7 @@ uint8_t board_offset_y = 4;
 uint8_t no_move_counter = 0;
 uint16_t cpu_waittime = 200;
 uint8_t background_scroll = YES;
+static uint8_t valid_move_checked = NO;
 
 /* Small deterministic PRNG: the AI only uses it to break ties between
  * equally good moves, so a 16-bit LCG is plenty and avoids pulling in
@@ -94,7 +95,8 @@ void init_game(void) {
     } else {
         cpu_waittime = 100;
     }
-
+    
+    valid_move_checked = NO;
     gamestate = GAME_RUN;
 }
 
@@ -210,6 +212,16 @@ uint8_t place_stone(uint8_t y, uint8_t x, uint8_t probe, uint8_t player) {
     swap_turn();
     count_stones(COUNT_NO_GAME_END);
 
+    /* Pump frames to let the 31-frame thumb sound finish playing
+       before returning. Otherwise, if the next player is the CPU,
+       its heavy AI calculation will block the audio tick and stretch/lag the sound. */
+    {
+        uint8_t delay;
+        for (delay = 0; delay < 32; delay++) {
+            pump_frame();
+        }
+    }
+
     return stones_turned;
 }
 
@@ -292,6 +304,7 @@ void computer_turn(void) {
     uint32_t start;
 
     for (j = 0; j < boardsize; j++) {
+        pump_frame();
         for (i = 0; i < boardsize; i++) {
             if (edgefield[j * boardsize + i] == EDGEFIELD_ACTIVE) {
                 stonecounter[j * boardsize + i] = place_stone(j, i, PROBE_YES, current_player);
@@ -357,14 +370,17 @@ void human_turn(void) {
     int16_t dir;
 
     /* Can this player move at all? */
-    if (check_valid_move() == NO) {
-        no_move_counter++;
-        if (no_move_counter == 2) {
-            count_stones(COUNT_END_GAME);
-        } else {
-            swap_turn();
+    if (!valid_move_checked) {
+        valid_move_checked = YES;
+        if (check_valid_move() == NO) {
+            no_move_counter++;
+            if (no_move_counter == 2) {
+                count_stones(COUNT_END_GAME);
+            } else {
+                swap_turn();
+            }
+            return;
         }
-        return;
     }
     no_move_counter = 0;
 
@@ -431,6 +447,7 @@ void swap_turn(void) {
         current_player = PLAYER_ONE;
         set_tile(14, 5, stone_color1, PALETTEBYTE);
     }
+    valid_move_checked = NO;
 }
 
 void wait_till_space(void) {
@@ -465,6 +482,27 @@ void end_game_state(uint8_t black, uint8_t white) {
             reset_sprites();
             return;
         }
+
+        if (input_mouse_present()) {
+            int16_t mx, my;
+            uint8_t buttons;
+            input_mouse(&mx, &my, &buttons);
+            if (buttons & 0x80) {
+                uint8_t cx = (uint8_t)(mx >> 4);
+                uint8_t cy = (uint8_t)(my >> 4);
+                if (cy <= 1 && cx <= 11) {
+                    /* wait for release */
+                    do {
+                        pump_frame();
+                        input_mouse(&mx, &my, &buttons);
+                    } while ((buttons & 0x80) != 0x00);
+                    
+                    gamestate = GAME_MENU;
+                    reset_sprites();
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -472,6 +510,7 @@ uint8_t check_valid_move(void) {
     uint8_t i, j;
 
     for (j = 0; j < boardsize; j++) {
+        pump_frame();
         for (i = 0; i < boardsize; i++) {
             if (edgefield[j * boardsize + i] == EDGEFIELD_ACTIVE) {
                 if (place_stone(j, i, PROBE_YES, current_player) > 0) {

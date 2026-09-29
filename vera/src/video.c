@@ -75,14 +75,18 @@ void init_screen(void) {
     VERA.layer0.config   = 0x03;                        /* tile mode, 8 bpp, 16x16 */
     VERA.layer0.tilebase = (uint8_t)((TILEBASE >> 11) | 0x03);
     VERA.layer0.mapbase  = (uint8_t)(MAPBASE0 >> 9);
-    VERA.layer0.hscroll  = 0;
-    VERA.layer0.vscroll  = 0;
+    VERA.layer0.hscroll_l  = 0;
+    VERA.layer0.hscroll_h  = 0;
+    VERA.layer0.vscroll_l  = 0;
+    VERA.layer0.vscroll_h  = 0;
 
     VERA.layer1.config   = 0x03;
     VERA.layer1.tilebase = (uint8_t)((TILEBASE >> 11) | 0x03);
     VERA.layer1.mapbase  = (uint8_t)(MAPBASE1 >> 9);
-    VERA.layer1.hscroll  = 0;
-    VERA.layer1.vscroll  = 0;
+    VERA.layer1.hscroll_l  = 0;
+    VERA.layer1.hscroll_h  = 0;
+    VERA.layer1.vscroll_l  = 0;
+    VERA.layer1.vscroll_h  = 0;
 
     /* This VERA card (VidHD style) uses bit0 = video out, bit4 = layer 0,
      * bit5 = layer 1, bit6 = sprites - not the X16 bit layout. */
@@ -222,8 +226,10 @@ void load_help_page(uint8_t page) {
 void update_background_diagonal(void) {
     if (!background_scroll) return;
     bgscroll = (uint8_t)((bgscroll - 1) & 0x0F);
-    VERA.layer0.hscroll = bgscroll;
-    VERA.layer0.vscroll = bgscroll;
+    VERA.layer0.hscroll_l = bgscroll;
+    VERA.layer0.hscroll_h = 0;
+    VERA.layer0.vscroll_l = bgscroll;
+    VERA.layer0.vscroll_h = 0;
 }
 
 /* -------------------------------- sprites ------------------------------- */
@@ -256,8 +262,8 @@ void set_sprite_px(uint8_t sprite_id, uint16_t y, uint16_t x) {
 }
 
 void reset_sprites(void) {
-    vera_set_addr(VERA_INC_BANK1, SPRITEBASE);
-    for (uint8_t i = 0; i < 128; i++) {
+    vera_set_addr(VERA_INC_BANK1, SPRITEBASE + 8);
+    for (uint8_t i = 1; i < 128; i++) {
         VERA.data0 = 0x00;
         VERA.data0 = 0x00;
         VERA.data0 = 16;

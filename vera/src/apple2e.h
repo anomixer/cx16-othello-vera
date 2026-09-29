@@ -87,15 +87,19 @@ struct __vera {
         unsigned char   config;         /* Layer map geometry */
         unsigned char   mapbase;        /* Map data address */
         unsigned char   tilebase;       /* Tile address and geometry */
-        unsigned int    hscroll;        /* Smooth scroll horizontal */
-        unsigned int    vscroll;        /* Smooth scroll vertical */
+        unsigned char   hscroll_l;      /* Smooth scroll horizontal */
+        unsigned char   hscroll_h;
+        unsigned char   vscroll_l;      /* Smooth scroll vertical */
+        unsigned char   vscroll_h;
     } layer0;
     struct {
         unsigned char   config;
         unsigned char   mapbase;
         unsigned char   tilebase;
-        unsigned int    hscroll;
-        unsigned int    vscroll;
+        unsigned char   hscroll_l;
+        unsigned char   hscroll_h;
+        unsigned char   vscroll_l;
+        unsigned char   vscroll_h;
     } layer1;
     struct {
         unsigned char   control;        /* PCM format */

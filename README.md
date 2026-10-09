@@ -4,6 +4,8 @@
 [![build](https://github.com/ifilot/cx16-othello/actions/workflows/build.yml/badge.svg)](https://github.com/ifilot/cx16-othello/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
+[Play in your browser](https://ifilot.github.io/cx16-othello/)
+
 [Download latest version](https://github.com/ifilot/cx16-othello/releases/latest/download/CX16-OTHELLO.ZIP)
 
 Othello for the Commander X16 is a modern adaptation of the classic strategy
@@ -97,7 +99,49 @@ Compilation is fairly straightforward. Go to the `src` folder and run `make`.
 cd src && make
 ```
 
-## Dependencies
+## Browser game and GitHub Pages
+
+From the repository root, build the game and its website with:
+
+```bash
+make site
+```
+
+This needs `make`, `cc65`, Python 3, NumPy, and Pillow (on Ubuntu:
+`sudo apt-get install build-essential cc65 python3 python3-numpy python3-pil`).
+The first build downloads the official [Commander X16 WebAssembly release
+r49](https://github.com/X16Community/x16-emulator/releases/tag/r49), including
+its matching ROM. The archive is verified against a pinned SHA-256 checksum
+and cached in `build/site-cache/`. No Emscripten installation is needed.
+For an offline build, put `x16emu_wasm-r49.zip` from that release in the cache
+directory before running `make site`.
+
+The self-contained static site is written to `build/site/`. Run `make serve`
+and visit **http://localhost:8000** to preview it; the emulator needs an HTTP
+server rather than opening `index.html` directly. The site includes the freshly
+compiled game, every runtime asset, a downloadable game ZIP, and license
+notices. Its emulator only downloads when the visitor clicks Play, and sound
+can be enabled with the Sound button. A keyboard or mouse is recommended.
+
+The `Game website` workflow builds and deploys GitHub Pages on pushes to
+**`master` only**. Manual runs also require `master`; development branches,
+pull requests, and tags do not deploy the site. In repository **Settings →
+Pages → Build and deployment → Source**, select **GitHub Actions** once, then
+push the workflow to `master` (or run it manually on `master`). The expected
+address for this repository is **https://ifilot.github.io/cx16-othello/**.
+If the `github-pages` environment has branch restrictions, allow `master`.
+
+The website source is in `site/`; packaging is in `tools/build_site.py`, and
+deployment is in `.github/workflows/pages.yml`. All runtime URLs are relative
+so deployment under a GitHub Pages project path works without configuration.
+
+An optional browser regression check in `tools/check_site.cjs` uses Playwright
+and Chromium. With Playwright installed and the preview server running, use
+`node tools/check_site.cjs http://localhost:8000/`. It checks actual mouse moves
+at desktop and mobile sizes, resource loading, sound controls, fullscreen,
+and missing-file error handling. Set `CHROMIUM_PATH` to use an existing browser.
+
+## Game dependencies
 
 CX16-Othello makes use of [zsmkit](https://github.com/mooinglemur/zsmkit) which
 is an advanced music and sound effects engine for the Commander X16 and
@@ -112,10 +156,12 @@ this repository and automatically embedded in the `.PRG` file.
   permission of the author.
   - For $2.00 you can obtain a license to use these in your project
   - I am in no way affiliated with Alb_pixel Store.
-* Background music "Corridors of Time" by GTR3QQ is available under a
-  CC-BY-SA-4.0 license and obtained from [this source](https://github.com/mooinglemur/melodius/blob/main/ROOT/ZSM/Furnace/GTR3QQ/Corridors%20of%20Time.zsm)
-  GTR3QQ is graciously acknowledged for producing this piece of music and offering
-  it under a liberal license.
+* Background music by **Crisp** was commissioned and paid for specifically
+  for CX16-Othello. Copyright remains with Crisp; all rights reserved.
+  The music asset (`assets/sound/othello.zsm`, packaged as `OTHELLO.ZSM`)
+  is **not** covered by the game's GPL license or a Creative Commons license.
+  Its inclusion with this game does not grant permission to copy, modify,
+  redistribute, or reuse the music separately. Contact Crisp for permission.
 
 ## Community guidelines
 

@@ -1,0 +1,51 @@
+name: Game website
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install game build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cc65 python3-numpy python3-pil
+      - name: Cache official WebAssembly release
+        uses: actions/cache@v4
+        with:
+          path: build/site-cache
+          key: x16-wasm-r49-9711036cf5b33504
+      - name: Build game website
+        run: make site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/site
+
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish game website
+        id: deployment
+        uses: actions/deploy-pages@v4

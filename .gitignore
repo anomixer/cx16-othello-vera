@@ -1,3 +1,9 @@
 !empty
 .vscode
 *.ZIP
+build/
+src/*.o
+src/*.DAT
+src/*.PRG
+src/*.ZSM
+tools/__pycache__/

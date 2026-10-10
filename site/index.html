@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c7b76a">
+  <meta name="description" content="Play CX16-Othello in your browser. A classic game of strategy, red and teal stones, and Commander X16 pixel charm.">
+  <title>CX16-Othello · A little board. A lot of possibility.</title>
+  <link rel="icon" href="othello-tile.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#play-area">Skip to game</a>
+  <div class="page">
+    <header class="masthead">
+      <a class="wordmark" href="./"><span class="stones" aria-hidden="true"><i></i><i></i></span> CX16-OTHELLO</a>
+      <nav aria-label="Main navigation"><a href="#how-to-play">How to play</a><a href="https://github.com/ifilot/cx16-othello">Source ↗</a></nav>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <p class="eyebrow">A classic, with a little 8-bit charm</p>
+        <h1 id="title">Your next move<br>changes everything<span>.</span></h1>
+        <p class="lede">Two colors. One board. Turn your opponent’s stones into your own.<br class="desktop-break"> Othello for the Commander X16, ready to play right here.</p>
+      </section>
+
+      <section id="play-area" class="play-area" aria-label="Play CX16-Othello">
+        <div class="game-column">
+          <div class="screen-heading"><span>COMMANDER X16</span><span class="live"><span aria-hidden="true">●</span> BROWSER EDITION</span></div>
+          <div id="screen" class="screen">
+            <div id="cover" class="cover">
+              <img src="gameplay.gif" width="640" height="480" alt="CX16-Othello: red and teal stones on a pixel art board against a golden checkerboard.">
+              <div class="cover-action"><p>Pull up a chair.</p><button id="play" class="primary" type="button">Play Othello <span aria-hidden="true">▶</span></button><small>No install. Just one more move.</small></div>
+            </div>
+            <canvas id="canvas" width="640" height="480" tabindex="0" aria-label="Commander X16 emulator. Enter starts the game, arrow keys move, Space places a stone, Escape returns to the menu." hidden></canvas>
+          </div>
+          <div class="toolbar">
+            <p id="status" role="status">Ready when you are.</p>
+            <div class="tools"><button id="audio" type="button" aria-pressed="false" disabled>Sound off</button><button id="fullscreen" type="button" disabled>Fullscreen</button><button id="restart" type="button" disabled>Restart</button></div>
+          </div>
+          <p id="error" class="error" role="alert" hidden></p>
+          <noscript><p class="error">Enable JavaScript to play in your browser, or download the game below.</p></noscript>
+        </div>
+
+        <aside class="guide" aria-labelledby="welcome-title">
+          <span class="stones large" aria-hidden="true"><i></i><i></i></span>
+          <p class="eyebrow">Let’s play</p>
+          <h2 id="welcome-title">Easy to learn.<br>Lovely to master.</h2>
+          <p>Play against the computer, share the keyboard with a friend, or watch two computers trade moves.</p>
+          <dl class="controls">
+            <div><dt><kbd>Enter</kbd></dt><dd>Start a game</dd></div>
+            <div><dt><kbd>↑ ↓ ← →</kbd></dt><dd>Move your cursor</dd></div>
+            <div><dt><kbd>Space</kbd></dt><dd>Place a stone</dd></div>
+            <div><dt><kbd>S</kbd> / <kbd>H</kbd></dt><dd>Settings / help at the title</dd></div>
+            <div><dt><kbd>Esc</kbd></dt><dd>Back to the menu</dd></div>
+          </dl>
+          <p class="hint">Click the screen to focus the controls. You can also point and click to place stones.</p>
+          <p class="hint">Best with a keyboard or mouse. On a small screen, a connected keyboard lets you play.</p>
+        </aside>
+      </section>
+
+      <section id="how-to-play" class="rules" aria-labelledby="rules-title">
+        <div class="section-heading"><p class="eyebrow">The art of the flip</p><h2 id="rules-title">A few simple rules. Endless little decisions.</h2></div>
+        <ol class="rule-list">
+          <li><span class="step">01</span><h3>Find your opening</h3><p>Place a stone on an empty square. It must trap at least one opposing stone between your new stone and another of your own.</p></li>
+          <li><span class="step">02</span><h3>Make it your color</h3><p>Every trapped stone flips to your color. Look along rows, columns, and diagonals; one move can flip several lines.</p></li>
+          <li><span class="step">03</span><h3>Keep the majority</h3><p>No legal move? Your turn passes. When neither player can move, the game ends. The player with the most stones wins.</p></li>
+        </ol>
+      </section>
+
+      <section class="details" aria-label="Game options and download">
+        <p><strong>Make the board your own.</strong> Choose a 6×6, 8×8, or 10×10 board, stone or wood, and your favorite disc colors in the game’s settings.</p>
+        <a class="download" href="CX16-OTHELLO.ZIP" download>Download for your X16 <span aria-hidden="true">↓</span></a>
+      </section>
+    </main>
+    <footer>
+      <p>A small, open-source game by <a href="https://github.com/ifilot">Ivo Filot</a>.<br>Made for the joy of playing.</p>
+      <div class="credits"><p>Running on the <a href="https://github.com/X16Community/x16-emulator/tree/r49">Commander X16 emulator</a> · r49</p><p>Board &amp; stones: <a href="https://alb-pixel-store.itch.io/classic-board-games-assets">Alb_pixel Store</a> · Original music: Crisp · commissioned for this game</p><p><a href="game-license.txt">Code license</a> · <a href="asset-notices.txt">Asset notices</a> · <a href="emulator-license.txt">Emulator license</a> · <a href="rom-license.txt">ROM notices</a></p></div>
+    </footer>
+  </div>
+</body>
+</html>

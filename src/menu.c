@@ -31,7 +31,7 @@ void game_title() {
     static const uint8_t offsetx = 8;
 
     write_string("CX16-OTHELLO", 0, 0);
-    write_string("music by Crisps", 1, 5);
+    write_string("music by Crisp", 1, 5);
     write_string("1.2.0", 0, 15);
 
     // build sample board

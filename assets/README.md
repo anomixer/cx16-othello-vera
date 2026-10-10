@@ -6,7 +6,9 @@
   permission of the author (Alb_pixel store). 
   - For $2.00 you can obtain a license to use these in your project
   - I am in no way affiliated with Alb_pixel Store.
-* Background music "Corridors of Time" by GTR3QQ is available under a
-  CC-BY-SA-4.0 license and obtained from [this source](https://github.com/mooinglemur/melodius/blob/main/ROOT/ZSM/Furnace/GTR3QQ/Corridors%20of%20Time.zsm)
-  GTR3QQ is graciously acknowledged for producing this piece of music and offering
-  it under a liberal license.
+* Background music by **Crisp** was commissioned and paid for specifically
+  for CX16-Othello. Copyright remains with Crisp; all rights reserved.
+  The music asset (`assets/sound/othello.zsm`, packaged as `OTHELLO.ZSM`)
+  is **not** covered by the game's GPL license or a Creative Commons license.
+  Its inclusion with this game does not grant permission to copy, modify,
+  redistribute, or reuse the music separately. Contact Crisp for permission.

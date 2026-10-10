@@ -272,7 +272,7 @@ Five steps:
 | 2 | Convert ZSM music → VERA PSG | `tools\zsm2psg.py` |
 | 3 | Compile the Applesoft launcher | `tools\gen_startup.mjs` |
 | 4 | Compile slot-2 + slot-4 images | `mos-apple2e-clang` |
-| 5 | Assemble the ProDOS HDV | `tools\build_hdv.py` |
+| 5 | Create the 800 KB ProDOS HDV and add files with Cadius | `tools\build_hdv.py`, `tools\cadius.exe` |
 
 Compile flags:
 
@@ -316,16 +316,16 @@ vera/
 │   ├── zsm2psg.py            # ZSM → VERA PSG stream
 │   ├── gen_startup.mjs       # Applesoft BASIC → binary STARTUP
 │   ├── applebasic.mjs        # Applesoft tokenizer
-│   ├── build_hdv.py          # ProDOS volume writer
+│   ├── build_hdv.py          # Cadius-based ProDOS HDV packager
+│   ├── cadius.exe            # Creates volumes and adds ProDOS files
 │   ├── show_screen.py        # framebuffer → ASCII inspection
-│   ├── zsm_probe.py          # ZSM command inspector
-│   ├── applewin_ctl.ps1      # AppleWin automation
-│   └── applewin_probe.ps1
+│   └── zsm_probe.py          # ZSM command inspector
 ├── generated/                # build-time assets + tables
 │   ├── tiles.bin (16,384) font.bin (24,576) help.bin (1,440)
 │   ├── palette.bin (512) assets.bin (42,912) music.psg (155,428)
 │   └── asset_table.h music_table.h sfx_table.h
 ├── assets/                   # source art, palette png, help.hlp, zsm music
+│   └── prodos-system/         # PRODOS, BASIC.SYSTEM, CLOCK.SYSTEM for Cadius
 └── build/
     ├── main.bin main4.bin    # slot 2 / slot 4 payloads
     ├── main.elf main.bin.elf main4.bin.elf
@@ -345,11 +345,13 @@ ProDOS STARTUP (Applesoft, 1,115 B, type $FC, aux $0801)
 
 ### 4.3 HDV layout (1600 blocks)
 
-The ProDOS volume name is `CX16.OTHELLO`. Its root contains `OTHELLO` (marker),
-`STARTUP`, `MAIN.BIN`, `MAIN4.BIN`, `ASSETS.BIN`, and `MUSIC.PSG`. The builder
-allocates data and index blocks dynamically and prints each file's block range
-on every build. Large files use ProDOS tree storage. New entries receive
-creation and modification dates from build time.
+The ProDOS volume name is `CX16.OTHELLO`. Cadius creates the 800 KB volume and
+adds `PRODOS`, `BASIC.SYSTEM`, `CLOCK.SYSTEM`, `OTHELLO` (marker), `STARTUP`,
+`MAIN.BIN`, `MAIN4.BIN`, `ASSETS.BIN`, and `MUSIC.PSG` to its root. Cadius owns
+the directory entries, storage allocation, and file dates. The builder stages
+Apple II BIN payloads without their four-byte load headers and uses Cadius' file
+name suffix to set each ProDOS file type and auxiliary address. System files
+are kept in `assets/prodos-system/`; no prebuilt 800 KB base image is needed.
 
 `disk.c` checks the marker, opens the asset file, then lazily opens the music
 file. It uses ProDOS OPEN/GET_EOF/SET_MARK/READ rather than reserved raw block

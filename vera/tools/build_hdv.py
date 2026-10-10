@@ -1,227 +1,92 @@
 #!/usr/bin/env python3
-"""Assemble the bootable 800 KB ProDOS HDV for the CX16-OTHELLO Apple II port.
+"""Create the bootable CX16-OTHELLO HDV with Cadius.
 
-Boot chain:  ProDOS -> BASIC.SYSTEM -> Applesoft STARTUP -> BRUN MAIN.BIN
-STARTUP probes the VERA card slot and picks MAIN.BIN (slot 2) or MAIN4.BIN
-(slot 4).
-
-Layout (block numbers, 512 bytes each):
-    0-6     ProDOS master/volume header, directory, storage bitmap
-    7-99    reserved (PRODOS / CLOCK.SYSTEM / BASIC.SYSTEM from the base image)
-   100-...  STARTUP, MAIN.BIN, MAIN4.BIN
-   100-...  named ProDOS files, allocated by the builder
-
-Assets and music are ordinary ProDOS files opened and streamed with the MLI.
-All generated catalog entries receive the build's ProDOS creation/modification
-timestamp.
+Cadius owns the ProDOS volume, catalog, block allocation and file timestamps.
+Generated files are staged with Cadius' ``#TTAAAA`` suffix, where TT is the
+ProDOS file type and AAAA is the auxiliary type.
 """
 from __future__ import annotations
-import sys
-from datetime import datetime
+
+import argparse
+import shutil
+import subprocess
 from pathlib import Path
 
-BLOCK = 512
-RESERVE = 100
-KEEP = {"PRODOS", "CLOCK.SYSTEM", "BASIC.SYSTEM"}
 
-BUILD_TIME = datetime.now()
+VOLUME_NAME = "CX16.OTHELLO"
 
 
-def prodos_datetime(value: datetime) -> bytes:
-    year = value.year - (2000 if value.year >= 2000 else 1900)
-    if not 0 <= year <= 99:
-        raise ValueError(f"ProDOS timestamps cannot represent year {value.year}")
-    date = ((year & 0x7F) << 9) | ((value.month & 15) << 5) | (value.day & 31)
-    time = ((value.hour & 31) << 8) | (value.minute & 63)
-    return bytes((date & 255, date >> 8, time & 255, time >> 8))
+def cadius_add(cadius: Path, image: Path, source: Path) -> None:
+    subprocess.run(
+        [str(cadius), "ADDFILE", str(image), f"/{VOLUME_NAME}", str(source)],
+        check=True,
+    )
 
 
-BUILD_PRODOS_DATETIME = prodos_datetime(BUILD_TIME)
-
-
-class Alloc:
-    def __init__(self):
-        self.used = set(range(RESERVE))
-        self.new = []
-        self.next = RESERVE
-
-    def reserve(self, start: int, count: int):
-        self.used.update(range(start, start + count))
-
-    def one(self):
-        while self.next in self.used:
-            self.next += 1
-        b = self.next
-        self.used.add(b)
-        self.new.append(b)
-        self.next += 1
-        return b
-
-
-def raw_bin(path: Path, expected: int = 0x1400):
-    data = path.read_bytes()
-    if len(data) < 4 or (data[0] | data[1] << 8) != expected:
-        raise RuntimeError(f"bad BIN header in {path}")
-    return data[4:], data[0] | data[1] << 8
-
-
-def put(disk: bytearray, alloc: Alloc, name: str, typ: int, aux: int, data: bytes):
-    n = (len(data) + BLOCK - 1) // BLOCK
-    if n == 0:
-        raise ValueError(f"{name}: empty ProDOS files are not supported")
-    if n == 1:
-        key = alloc.one()
-        disk[key * BLOCK:key * BLOCK + len(data)] = data
-        return dict(name=name, storage=1, typ=typ, key=key, total=1,
-                    eof=len(data), aux=aux, first=key, last=key)
-    if n <= 256:
-        key = alloc.one()
-        index = bytearray(BLOCK)
-        first = 0
-        for i in range(n):
-            b = alloc.one()
-            if i == 0:
-                first = b
-            index[i] = b & 0xFF
-            index[256 + i] = b >> 8
-            chunk = data[i * BLOCK:(i + 1) * BLOCK]
-            disk[b * BLOCK:b * BLOCK + len(chunk)] = chunk
-        disk[key * BLOCK:(key + 1) * BLOCK] = index
-        return dict(name=name, storage=2, typ=typ, key=key, total=n + 1,
-                    eof=len(data), aux=aux, first=first, last=first + n - 1)
-
-    # Tree files use one master index and up to 256 sapling indexes.
-    key = alloc.one()
-    master = bytearray(BLOCK)
-    first = 0
-    index_count = (n + 255) // 256
-    for group in range(index_count):
-        index_block = alloc.one()
-        master[group] = index_block & 0xFF
-        master[256 + group] = index_block >> 8
-        index = bytearray(BLOCK)
-        for i in range(min(256, n - group * 256)):
-            data_index = group * 256 + i
-            b = alloc.one()
-            if data_index == 0:
-                first = b
-            index[i] = b & 0xFF
-            index[256 + i] = b >> 8
-            chunk = data[data_index * BLOCK:(data_index + 1) * BLOCK]
-            disk[b * BLOCK:b * BLOCK + len(chunk)] = chunk
-        disk[index_block * BLOCK:(index_block + 1) * BLOCK] = index
-    disk[key * BLOCK:(key + 1) * BLOCK] = master
-    return dict(name=name, storage=3, typ=typ, key=key,
-                total=n + index_count + 1, eof=len(data), aux=aux,
-                first=first, last=first + n - 1)
-
-
-def write_raw(disk: bytearray, start_block: int, data: bytes) -> int:
-    n = (len(data) + BLOCK - 1) // BLOCK
-    disk[start_block * BLOCK:start_block * BLOCK + len(data)] = data
-    return n
-
-
-def entry(vol, offset: int, f: dict):
-    vol[offset] = (f["storage"] << 4) | len(f["name"])
-    vol[offset + 1:offset + 1 + len(f["name"])] = f["name"].encode("ascii")
-    vol[offset + 0x10] = f["typ"]
-    vol[offset + 0x11] = f["key"] & 0xFF
-    vol[offset + 0x12] = f["key"] >> 8
-    vol[offset + 0x13] = f["total"] & 0xFF
-    vol[offset + 0x14] = f["total"] >> 8
-    vol[offset + 0x15] = f["eof"] & 0xFF
-    vol[offset + 0x16] = (f["eof"] >> 8) & 0xFF
-    vol[offset + 0x17] = (f["eof"] >> 16) & 0xFF
-    vol[offset + 0x1E] = 0xC3
-    vol[offset + 0x1F] = f["aux"] & 0xFF
-    vol[offset + 0x20] = f["aux"] >> 8
-    vol[offset + 0x25] = 2
-    vol[offset + 0x18:offset + 0x1C] = BUILD_PRODOS_DATETIME
-    vol[offset + 0x21:offset + 0x25] = BUILD_PRODOS_DATETIME
-
-
-def main(output=None):
+def main(output: Path | None = None, cadius_arg: Path | None = None) -> int:
     here = Path(__file__).resolve().parent
     vera = here.parent
     build = vera / "build"
-    gen = vera / "generated"
-    out = Path(output).resolve() if output else vera / "cx16-othello.hdv"
+    generated = vera / "generated"
+    system_dir = vera / "assets" / "prodos-system"
+    cadius = (cadius_arg or here / "cadius.exe").resolve()
+    out = (output or vera / "cx16-othello.hdv").resolve()
 
-    disk = bytearray((vera / "assets" / "800kb.hdv").read_bytes())
-    total_blocks = len(disk) // BLOCK
-    alloc = Alloc()
+    for path in (cadius, build / "STARTUP", build / "main.bin", build / "main4.bin",
+                 generated / "assets.bin", generated / "music.psg"):
+        if not path.is_file():
+            raise FileNotFoundError(f"Required build input not found: {path}")
+    for name in ("PRODOS", "BASIC.SYSTEM", "CLOCK.SYSTEM"):
+        if not (system_dir / f"{name}#FF0000").is_file():
+            raise FileNotFoundError(f"ProDOS system file not found: {system_dir / name}")
 
-    files = [put(disk, alloc, "OTHELLO", 0x06, 0, b"OTHELLO")]
-    files.append(put(disk, alloc, "STARTUP", 0xFC, 0x0801, (build / "STARTUP").read_bytes()))
-    for name, fname in (("MAIN.BIN", "main.bin"), ("MAIN4.BIN", "main4.bin")):
-        data, address = raw_bin(build / fname)
-        files.append(put(disk, alloc, name, 0x06, address, data))
-    files.append(put(disk, alloc, "ASSETS.BIN", 0x06, 0, (gen / "assets.bin").read_bytes()))
-    files.append(put(disk, alloc, "MUSIC.PSG", 0x06, 0, (gen / "music.psg").read_bytes()))
+    stage = build / "cadius-files"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True)
 
-    # ---- rebuild the directory: keep the system files, add ours ----
-    vol = memoryview(disk)[2 * BLOCK:3 * BLOCK]
-    volume_name = b"CX16.OTHELLO"
-    vol[4] = 0xF0 | len(volume_name)
-    vol[5:20] = volume_name.ljust(15, b"\0")
-    retained = []
-    for i in range(1, 13):
-        off = 4 + i * 39
-        if not vol[off]:
-            continue
-        n = vol[off] & 15
-        name = bytes(vol[off + 1:off + 1 + n]).decode("ascii", "replace")
-        if name in KEEP:
-            retained.append(bytes(vol[off:off + 39]))
-    for i in range(1, 13):
-        vol[4 + i * 39:4 + (i + 1) * 39] = b"\0" * 39
-    for i, old in enumerate(retained, 1):
-        vol[4 + i * 39:4 + i * 39 + 39] = old
+    # Cadius infers ProDOS file type and aux type from this filename suffix.
+    staged: list[Path] = []
 
-    all_entries = retained + [None] * len(files)
-    for i, f in enumerate(files):
-        all_entries[len(retained) + i] = f
-    for i, item in enumerate(all_entries[:12], 1):
-        if isinstance(item, bytes):
-            vol[4 + i * 39:4 + (i + 1) * 39] = item
-        else:
-            entry(vol, 4 + i * 39, item)
+    def stage_bytes(name: str, suffix: str, data: bytes) -> Path:
+        path = stage / f"{name}#{suffix}"
+        path.write_bytes(data)
+        staged.append(path)
+        return path
 
-    previous = 2
-    for start in range(12, len(all_entries), 13):
-        db = alloc.one()
-        disk[previous * BLOCK + 2:previous * BLOCK + 4] = db.to_bytes(2, "little")
-        disk[db * BLOCK:db * BLOCK + BLOCK] = b"\0" * BLOCK
-        disk[db * BLOCK:db * BLOCK + 2] = previous.to_bytes(2, "little")
-        page = memoryview(disk)[db * BLOCK:(db + 1) * BLOCK]
-        for i, item in enumerate(all_entries[start:start + 13]):
-            if isinstance(item, bytes):
-                page[4 + i * 39:4 + (i + 1) * 39] = item
-            else:
-                entry(page, 4 + i * 39, item)
-        previous = db
+    stage_bytes("OTHELLO", "062000", b"OTHELLO")
+    stage_bytes("STARTUP", "FC0801", (build / "STARTUP").read_bytes())
+    for prodos_name, build_name in (("MAIN.BIN", "main.bin"), ("MAIN4.BIN", "main4.bin")):
+        data = (build / build_name).read_bytes()
+        if len(data) < 4:
+            raise ValueError(f"Invalid Apple II BIN file: {build / build_name}")
+        load_address = int.from_bytes(data[:2], "little")
+        body_length = int.from_bytes(data[2:4], "little")
+        body = data[4:]
+        if load_address != 0x1400 or body_length != len(body):
+            raise ValueError(f"Invalid Apple II BIN header in {build / build_name}")
+        stage_bytes(prodos_name, f"06{load_address:04X}", body)
+    stage_bytes("ASSETS.BIN", "060000", (generated / "assets.bin").read_bytes())
+    stage_bytes("MUSIC.PSG", "060000", (generated / "music.psg").read_bytes())
 
-    vol[0x25] = (len(retained) + len(files)) & 0xFF
-    vol[0x26] = (len(retained) + len(files)) >> 8
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()
+    subprocess.run([str(cadius), "CREATEVOLUME", str(out), VOLUME_NAME, "800KB"], check=True)
+    for name in ("PRODOS", "BASIC.SYSTEM", "CLOCK.SYSTEM"):
+        cadius_add(cadius, out, system_dir / f"{name}#FF0000")
+    for source in staged:
+        cadius_add(cadius, out, source)
 
-    # A set bit means FREE; clear the bits of every block we now own.
-    for b in alloc.used:
-        disk[6 * BLOCK + b // 8] &= (0xFF ^ (1 << (7 - b % 8))) & 0xFF
-
-    if max(alloc.used) >= total_blocks:
-        raise ValueError("HDV capacity exceeded")
-
-    out.write_bytes(disk)
-    print(f"  {out.name}: {len(disk) // 1024} KB, volume CX16.OTHELLO, "
-          f"{len(retained) + len(files)} files")
-    print("  files: " + ", ".join(f["name"] for f in files))
-    # Report each file's data-block range so the documented layout stays honest.
-    for f in files:
-        print(f"  {f['name']:10s} blocks {f['first']}-{f['last']} "
-              f"({f['total']} incl. index), {f['eof']} bytes")
+    subprocess.run([str(cadius), "CHECKVOLUME", str(out)], check=True)
+    subprocess.run([str(cadius), "CATALOG", str(out)], check=True)
+    print(f"Built {out} ({out.stat().st_size // 1024} KB) with Cadius")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else None))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", type=Path, help="Optional output HDV path")
+    parser.add_argument("--cadius", type=Path, help="Path to Cadius executable")
+    args = parser.parse_args()
+    raise SystemExit(main(args.output, args.cadius))

@@ -5,7 +5,7 @@ rem
 rem  1. generate the asset blob  (tools\gen_assets.py)
 rem  2. convert the ZSM music    (tools\zsm2psg.py)
 rem  3. compile MAIN.BIN for VERA Slot 2 and Slot 4
-rem  4. assemble the bootable ProDOS HDV (tools\build_hdv.py)
+rem  4. assemble the bootable ProDOS HDV with Cadius (tools\build_hdv.py)
 rem =====================================================================
 setlocal
 cd /d "%~dp0"
@@ -49,7 +49,7 @@ if errorlevel 1 goto fail
 call "%CC%" -Os -mcpu=mos65c02 -Isrc -Igenerated -DVERA_BASE=0xC400 -T src\link1000.ld -o build\main4.bin src\main.c src\video.c src\game.c src\menu.c src\input.c src\audio.c src\disk.c src\sfx_data.c src\mli.s src\mouse.s
 if errorlevel 1 goto fail
 
-echo [5/5] Building ProDOS HDV (tools\build_hdv.py) ...
+echo [5/5] Building ProDOS HDV with Cadius (tools\build_hdv.py) ...
 call "%PY%" tools\build_hdv.py %*
 if errorlevel 1 goto fail
 

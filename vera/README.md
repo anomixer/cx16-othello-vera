@@ -29,6 +29,7 @@ Requirements (all already present on this machine):
 | LLVM-MOS SDK | `C:\dev\llvm-mos-sdk\install\bin\mos-apple2e-clang.bat` |
 | Python 3 + Pillow + NumPy | `python` on PATH |
 | Node.js | `node` on PATH |
+| Cadius | bundled as `tools\cadius.exe` |
 
 Five steps:
 
@@ -42,8 +43,8 @@ Five steps:
    `build/STARTUP` (type `$FC`, aux `$0801`).
 4. Two compile passes with `src/link1000.ld`: `build/main.bin` (VERA at
    `$C200`, slot 2) and `build/main4.bin` (`-DVERA_BASE=0xC400`, slot 4).
-5. `tools\build_hdv.py` — assembles `cx16-othello.hdv` on top of the stock
-   `vera/assets/800kb.hdv` base image.
+5. `tools\build_hdv.py` — uses bundled Cadius to create an 800 KB
+   `CX16.OTHELLO` volume and add the ProDOS system and game files.
 
 `src/link1000_elf.ld` is a disassembly-only twin of `link1000.ld` (ELF output
 so `llvm-objdump` can read it). It is not part of the shipping image.
@@ -82,11 +83,12 @@ Memory map (`src/link1000.ld`):
 
 ## 3. ProDOS files and HDV
 
-The bootable HDV is named `CX16.OTHELLO`. Game content is stored as normal
-ProDOS files in its root directory: `OTHELLO` (game marker), `STARTUP`,
-`MAIN.BIN`, `MAIN4.BIN`, `ASSETS.BIN`, and `MUSIC.PSG`. The builder allocates
-file data and index blocks and writes ProDOS creation and modification dates
-from the build time.
+The bootable HDV is named `CX16.OTHELLO`. Cadius creates the volume and adds
+the ProDOS system files and game content as normal ProDOS files in its root
+directory: `OTHELLO` (game marker), `STARTUP`, `MAIN.BIN`, `MAIN4.BIN`,
+`ASSETS.BIN`, and `MUSIC.PSG`. Cadius handles directory entries, file block
+allocation, and file dates. The extracted system files used by the build are
+kept in `assets/prodos-system/`.
 
 The game verifies the `OTHELLO` marker before opening `ASSETS.BIN`; this keeps
 unrelated copies of the common asset filename from being used accidentally.
@@ -269,8 +271,3 @@ VRAM region (`diag_trace.txt`, `diag_trace_summary.txt`).
 * Joystick detection probes the 555 one-shot paddles once at startup; on a
   machine without paddles the probe times out and joystick handling is
   disabled, so the paddle spin loop never runs in normal play.
-* `tools/applewin_ctl.ps1` / `tools/applewin_probe.ps1` are leftovers from the
-  abandoned AppleWin screenshot approach (AppleWin's VERA output replaces the
-  Apple II framebuffer only once VERA video is enabled, and its window is a
-  modeless dialog that PrintWindow cannot capture). They are kept for reference
-  only; the headless harness is the supported path.

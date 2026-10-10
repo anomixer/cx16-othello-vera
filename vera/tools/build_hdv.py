@@ -9,22 +9,34 @@ Layout (block numbers, 512 bytes each):
     0-6     ProDOS master/volume header, directory, storage bitmap
     7-99    reserved (PRODOS / CLOCK.SYSTEM / BASIC.SYSTEM from the base image)
    100-...  STARTUP, MAIN.BIN, MAIN4.BIN
-   900-...  assets.bin  (raw blocks, read by MLI - no directory entry)
-  1000-...  music.psg   (raw blocks, read by MLI - no directory entry)
+   100-...  named ProDOS files, allocated by the builder
 
-The raw ranges are marked used in the storage bitmap so ProDOS never hands
-them to a named file.  Mirrors src/disk.h - keep the two in sync.
+Assets and music are ordinary ProDOS files opened and streamed with the MLI.
+All generated catalog entries receive the build's ProDOS creation/modification
+timestamp.
 """
 from __future__ import annotations
 import sys
+from datetime import datetime
 from pathlib import Path
 
 BLOCK = 512
 RESERVE = 100
 KEEP = {"PRODOS", "CLOCK.SYSTEM", "BASIC.SYSTEM"}
 
-ASSET_START_BLOCK = 900     # must match ASSET_START_BLOCK in src/disk.h
-MUSIC_START_BLOCK = 1000    # must match MUSIC_START_BLOCK in src/disk.h
+BUILD_TIME = datetime.now()
+
+
+def prodos_datetime(value: datetime) -> bytes:
+    year = value.year - (2000 if value.year >= 2000 else 1900)
+    if not 0 <= year <= 99:
+        raise ValueError(f"ProDOS timestamps cannot represent year {value.year}")
+    date = ((year & 0x7F) << 9) | ((value.month & 15) << 5) | (value.day & 31)
+    time = ((value.hour & 31) << 8) | (value.minute & 63)
+    return bytes((date & 255, date >> 8, time & 255, time >> 8))
+
+
+BUILD_PRODOS_DATETIME = prodos_datetime(BUILD_TIME)
 
 
 class Alloc:
@@ -55,27 +67,53 @@ def raw_bin(path: Path, expected: int = 0x1400):
 
 def put(disk: bytearray, alloc: Alloc, name: str, typ: int, aux: int, data: bytes):
     n = (len(data) + BLOCK - 1) // BLOCK
+    if n == 0:
+        raise ValueError(f"{name}: empty ProDOS files are not supported")
     if n == 1:
         key = alloc.one()
         disk[key * BLOCK:key * BLOCK + len(data)] = data
         return dict(name=name, storage=1, typ=typ, key=key, total=1,
                     eof=len(data), aux=aux, first=key, last=key)
-    if n > 256:
-        raise ValueError(f"{name}: {n} blocks exceeds a single sapling index")
+    if n <= 256:
+        key = alloc.one()
+        index = bytearray(BLOCK)
+        first = 0
+        for i in range(n):
+            b = alloc.one()
+            if i == 0:
+                first = b
+            index[i] = b & 0xFF
+            index[256 + i] = b >> 8
+            chunk = data[i * BLOCK:(i + 1) * BLOCK]
+            disk[b * BLOCK:b * BLOCK + len(chunk)] = chunk
+        disk[key * BLOCK:(key + 1) * BLOCK] = index
+        return dict(name=name, storage=2, typ=typ, key=key, total=n + 1,
+                    eof=len(data), aux=aux, first=first, last=first + n - 1)
+
+    # Tree files use one master index and up to 256 sapling indexes.
     key = alloc.one()
-    index = bytearray(BLOCK)
+    master = bytearray(BLOCK)
     first = 0
-    for i in range(n):
-        b = alloc.one()
-        if i == 0:
-            first = b
-        index[i] = b & 0xFF
-        index[256 + i] = b >> 8
-        chunk = data[i * BLOCK:(i + 1) * BLOCK]
-        disk[b * BLOCK:b * BLOCK + len(chunk)] = chunk
-    disk[key * BLOCK:(key + 1) * BLOCK] = index
-    return dict(name=name, storage=2, typ=typ, key=key, total=n + 1,
-                eof=len(data), aux=aux, first=first, last=first + n - 1)
+    index_count = (n + 255) // 256
+    for group in range(index_count):
+        index_block = alloc.one()
+        master[group] = index_block & 0xFF
+        master[256 + group] = index_block >> 8
+        index = bytearray(BLOCK)
+        for i in range(min(256, n - group * 256)):
+            data_index = group * 256 + i
+            b = alloc.one()
+            if data_index == 0:
+                first = b
+            index[i] = b & 0xFF
+            index[256 + i] = b >> 8
+            chunk = data[data_index * BLOCK:(data_index + 1) * BLOCK]
+            disk[b * BLOCK:b * BLOCK + len(chunk)] = chunk
+        disk[index_block * BLOCK:(index_block + 1) * BLOCK] = index
+    disk[key * BLOCK:(key + 1) * BLOCK] = master
+    return dict(name=name, storage=3, typ=typ, key=key,
+                total=n + index_count + 1, eof=len(data), aux=aux,
+                first=first, last=first + n - 1)
 
 
 def write_raw(disk: bytearray, start_block: int, data: bytes) -> int:
@@ -99,6 +137,8 @@ def entry(vol, offset: int, f: dict):
     vol[offset + 0x1F] = f["aux"] & 0xFF
     vol[offset + 0x20] = f["aux"] >> 8
     vol[offset + 0x25] = 2
+    vol[offset + 0x18:offset + 0x1C] = BUILD_PRODOS_DATETIME
+    vol[offset + 0x21:offset + 0x25] = BUILD_PRODOS_DATETIME
 
 
 def main(output=None):
@@ -112,21 +152,19 @@ def main(output=None):
     total_blocks = len(disk) // BLOCK
     alloc = Alloc()
 
-    assets = (gen / "assets.bin").read_bytes()
-    music = (gen / "music.psg").read_bytes()
-
-    n_assets = write_raw(disk, ASSET_START_BLOCK, assets)
-    n_music = write_raw(disk, MUSIC_START_BLOCK, music)
-    alloc.reserve(ASSET_START_BLOCK, n_assets)
-    alloc.reserve(MUSIC_START_BLOCK, n_music)
-
-    files = [put(disk, alloc, "STARTUP", 0xFC, 0x0801, (build / "STARTUP").read_bytes())]
+    files = [put(disk, alloc, "OTHELLO", 0x06, 0, b"OTHELLO")]
+    files.append(put(disk, alloc, "STARTUP", 0xFC, 0x0801, (build / "STARTUP").read_bytes()))
     for name, fname in (("MAIN.BIN", "main.bin"), ("MAIN4.BIN", "main4.bin")):
         data, address = raw_bin(build / fname)
         files.append(put(disk, alloc, name, 0x06, address, data))
+    files.append(put(disk, alloc, "ASSETS.BIN", 0x06, 0, (gen / "assets.bin").read_bytes()))
+    files.append(put(disk, alloc, "MUSIC.PSG", 0x06, 0, (gen / "music.psg").read_bytes()))
 
     # ---- rebuild the directory: keep the system files, add ours ----
     vol = memoryview(disk)[2 * BLOCK:3 * BLOCK]
+    volume_name = b"CX16.OTHELLO"
+    vol[4] = 0xF0 | len(volume_name)
+    vol[5:20] = volume_name.ljust(15, b"\0")
     retained = []
     for i in range(1, 13):
         off = 4 + i * 39
@@ -175,10 +213,8 @@ def main(output=None):
         raise ValueError("HDV capacity exceeded")
 
     out.write_bytes(disk)
-    print(f"  {out.name}: {len(disk) // 1024} KB, "
-          f"{len(retained) + len(files)} files, "
-          f"assets {n_assets} blocks @{ASSET_START_BLOCK}, "
-          f"music {n_music} blocks @{MUSIC_START_BLOCK}")
+    print(f"  {out.name}: {len(disk) // 1024} KB, volume CX16.OTHELLO, "
+          f"{len(retained) + len(files)} files")
     print("  files: " + ", ".join(f["name"] for f in files))
     # Report each file's data-block range so the documented layout stays honest.
     for f in files:

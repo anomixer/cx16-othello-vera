@@ -69,27 +69,37 @@ Memory map (`src/link1000.ld`):
 | --- | --- |
 | `$0000-$001F` | LLVM-MOS imaginary registers `__rc0..__rc31` |
 | `$0050-$00BF` | C zero-page globals |
-| `$0800-$09FF` | disk asset streaming buffer |
+| `$0800-$0AFF` | ProDOS workspace / free game RAM |
+| `$0B00-$0B3F` | ProDOS pathname buffer |
 | `$0C00-$0DFF` | music streaming buffer |
 | `$0E00-$0FFF` | help-page text buffer |
-| `$1400-$4BF7` | program (text, rodata, data, bss) |
+| `$1400-$554D` | current program payload (text, rodata, data, bss) |
+| `$6000-$6BFF` | three ProDOS OPEN I/O buffers (1 KB each) |
 | `$BE00` | soft-stack base (grows down) |
 
 `$1000-$13FF` is deliberately untouched: ProDOS keeps its QUIT code at
 `$1000-$12FF` and BASIC.SYSTEM scratches at `$1300-$13FF`.
 
-## 3. HDV layout
+## 3. ProDOS files and HDV
 
-| Blocks | Content |
-| --- | --- |
-| 0–69 | ProDOS, `CLOCK.SYSTEM`, `BASIC.SYSTEM`, directory, volume bitmap |
-| 70–899 | free |
-| 900–983 | asset stream (tiles, font, help, palette) — `ASSET_START_BLOCK` |
-| 1000–1303 | music PSG stream — `MUSIC_START_BLOCK` |
+The bootable HDV is named `CX16.OTHELLO`. Game content is stored as normal
+ProDOS files in its root directory: `OTHELLO` (game marker), `STARTUP`,
+`MAIN.BIN`, `MAIN4.BIN`, `ASSETS.BIN`, and `MUSIC.PSG`. The builder allocates
+file data and index blocks and writes ProDOS creation and modification dates
+from the build time.
 
-The two constants live in `src/disk.h` and must match `tools/build_hdv.py`.
+The game verifies the `OTHELLO` marker before opening `ASSETS.BIN`; this keeps
+unrelated copies of the common asset filename from being used accidentally.
+Assets and music are streamed with ProDOS OPEN/READ/SET_MARK calls. The HDV
+uses three distinct, page-aligned 1 KB ProDOS I/O buffers at `$6000`, `$6400`,
+and `$6800`.
 
-Files in the volume: `STARTUP`, `MAIN.BIN`, `MAIN4.BIN`.
+File-level installation has been tested successfully from another ProDOS
+volume and subdirectory. Copy `OTHELLO`, `STARTUP`, `MAIN.BIN`, `MAIN4.BIN`,
+`ASSETS.BIN`, and `MUSIC.PSG` to the target directory, then set the ProDOS
+prefix to that directory before launching `STARTUP` (or BRUN the matching
+`MAIN.BIN` / `MAIN4.BIN`). The marker, assets, and music are resolved relative
+to the active prefix.
 
 ## 4. VERA specifics on the Apple II
 
@@ -184,9 +194,11 @@ node node_modules/jest/bin/jest.js src/worker/devices/vera/othello_diag.test.ts 
 ```
 
 The harness boots the real `build/main.bin` payload at `$1400`, services the
-ProDOS MLI (`READ_BLOCK`/`WRITE_BLOCK`) out of the shipped `.hdv` by
-intercepting `JSR $BF00`, drives the VERA renderer, injects keyboard codes and
-dumps the 640×480 framebuffer as 24-bit BMP.
+ProDOS MLI by intercepting `JSR $BF00`, drives the VERA renderer, injects
+keyboard codes and dumps the 640×480 framebuffer as 24-bit BMP. The checked-in
+apple2ts harness still models the earlier fixed-block disk calls; update its
+MLI emulation to cover OPEN/READ/SET_MARK/GET_EOF/GET_PREFIX before relying on
+those automated disk-loading tests with the file-level build.
 
 What the five headless tests prove:
 
@@ -198,7 +210,7 @@ What the five headless tests prove:
 3. **Settings + full 10×10 CPU-vs-CPU game** — drives the settings menu
    (player types, board size 10, wood board, both stone colours), starts a
    game, plays it to the game-over state (57 + 43 = 100 stones) and reads both
-   the asset blocks (900+) and the music blocks (1000+).
+   streamed assets and music from ProDOS files.
 4. **Cursor directions** — each Apple //e arrow key moves the cursor one cell
    in the matching screen direction, checked against `curx/cury` and the cursor
    sprite's pixel box.
@@ -237,8 +249,9 @@ VRAM region (`diag_trace.txt`, `diag_trace_summary.txt`).
 
 ## 6. Running it for real
 
-* **AppleWin**: point a hard-disk slot at `cx16-othello.hdv`, boot ProDOS,
-  `RUN STARTUP`.
+* **AppleWin**: point a hard-disk slot at `cx16-othello.hdv` and boot ProDOS;
+  the startup program launches automatically. A direct `RUN STARTUP` also
+  works.
 * **Apple2TS**: load the `.hdv` as a hard-disk image in slot 7 with the VERA
   card in slot 2.
 

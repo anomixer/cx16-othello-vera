@@ -31,7 +31,7 @@ each one was discovered by breaking the game, and each has a regression test.
 | Repo | What it contributed |
 | :--- | :--- |
 | `C:\dev\veratest` | VERA register map on Apple II, PSG register layout, Applesoft `STARTUP` launcher pattern, slot-2/slot-4 dual image pattern |
-| `C:\dev\time-pilot` | ProDOS fixed-block MLI `$80` streaming, single 512-byte music buffer, VSYNC-driven music tick |
+| `C:\dev\time-pilot` | ProDOS MLI patterns, 512-byte music streaming, VSYNC-driven music tick |
 | `C:\dev\freegemas` | Tilemap + sprite composition for a board game, palette packing |
 | `C:\dev\x16-hero-vera` | X16 → Apple II asset conversion pipeline, ZSM → PSG re-voicing |
 
@@ -84,16 +84,13 @@ Palette packing is `[G4<<4 | B4][0 | R4]` little-endian, generated from
 $0000-$00FF   Zero page          LLVM-MOS imaginary registers __rc0..__rc31 at $02-$1F
                                .zp.data $50-$9A (75 B), .zp.bss $9B-$9D
 $0100-$01FF   Hardware stack page
-$0800-$0BFF   Disk block buffer
+$0800-$0AFF   ProDOS workspace / free game RAM
+$0B00-$0B3F   ProDOS pathname buffer
 $0C00-$0DFF   Music 512-byte streaming buffer
 $0E00-$13FF   Help page buffer (240 B) + ProDOS scratch
 $1000-$13FF   NOT TOUCHED      ProDOS QUIT / BASIC.SYSTEM scratch
-$1400-$48D7   Program payload  loaded by BRUN
-$1400         .text   13,005 B (0x32CD)
-$4718         .rodata    433 B
-$48C9         .data       15 B
-$48D8         .bss       561 B  (zero-filled at runtime)
-$4B09         .noinit     26 B  -> program ends $4B23
+$1400-$554D   Current program payload (changes with each build)
+$6000-$6BFF   Three page-aligned 1 KB ProDOS OPEN buffers
 $BE00         __stack    soft stack grows down from here
 $BF00         ProDOS MLI entry
 $C200/$C400   VERA registers
@@ -305,8 +302,8 @@ vera/
 │   ├── video.c/.h            # VERA init, tilemaps, fonts, sprites, help pages
 │   ├── input.c/.h            # keyboard, joystick, mouse
 │   ├── audio.c/.h            # PSG music streaming + SFX
-│   ├── disk.c/.h             # ProDOS fixed-block MLI streaming
-│   ├── mli.s                 # JSR $BF00 READ_BLOCK / WRITE_BLOCK / QUIT
+│   ├── disk.c/.h             # ProDOS file-level MLI streaming
+│   ├── mli.s                 # JSR $BF00 file calls, block calls, and QUIT
 │   ├── mouse.s               # Apple Mouse Card driver
 │   ├── apple2e.h             # VERA register structs (Apple II semantics)
 │   ├── constants.h           # VRAM layout, tile ids, key codes
@@ -348,22 +345,21 @@ ProDOS STARTUP (Applesoft, 1,115 B, type $FC, aux $0801)
 
 ### 4.3 HDV layout (1600 blocks)
 
-| Blocks | Content |
-| :--- | :--- |
-| 0–15 | ProDOS volume header, bit map, root directory |
-| 100 | `STARTUP` index block |
-| 101–103 | `STARTUP` data (1,115 B) |
-| 104 | `MAIN.BIN` index block |
-| 105–131 | `MAIN.BIN` data (13,528 B, slot 2) |
-| 132 | `MAIN4.BIN` index block |
-| 133–159 | `MAIN4.BIN` data (13,528 B, slot 4) |
-| 900–983 | `assets.bin` — 42,912 B = 84 blocks (raw, no directory entry) |
-| 1000–1303 | `music.psg` — 155,428 B = 304 blocks (raw, no directory entry) |
+The ProDOS volume name is `CX16.OTHELLO`. Its root contains `OTHELLO` (marker),
+`STARTUP`, `MAIN.BIN`, `MAIN4.BIN`, `ASSETS.BIN`, and `MUSIC.PSG`. The builder
+allocates data and index blocks dynamically and prints each file's block range
+on every build. Large files use ProDOS tree storage. New entries receive
+creation and modification dates from build time.
 
-`tools/build_hdv.py` prints these ranges on every build.
+`disk.c` checks the marker, opens the asset file, then lazily opens the music
+file. It uses ProDOS OPEN/GET_EOF/SET_MARK/READ rather than reserved raw block
+ranges. Three aligned 1 KB OPEN buffers live at `$6000`, `$6400`, and `$6800`;
+keep them outside ProDOS-owned memory and the game payload.
 
-`src/disk.h` and `tools/build_hdv.py` must stay in sync; the runtime reads
-these ranges with MLI `$80` `READ_BLOCK` only (no pathname parsing).
+Copied installation was confirmed working from another ProDOS volume and
+subdirectory. Set the ProDOS prefix to the target volume root or game
+subdirectory before launching. An empty prefix on the packaged direct-boot HDV
+falls back to `/CX16.OTHELLO`.
 
 Asset offsets inside `assets.bin` (`generated/asset_table.h`):
 
@@ -481,7 +477,11 @@ Test files live in the apple2ts repo by necessity (jest/ts-jest module
 resolution); they read assets from absolute paths under `C:/dev/cx16-othello/vera`
 and write to `C:/dev/cx16-othello/vera/build/headless/`.
 
-**Current status: `Test Suites: 2 passed, Tests: 8 passed`.**
+The recorded headless pass predates the ProDOS file-level conversion. The
+apple2ts harness currently emulates READ_BLOCK/WRITE_BLOCK only; update its MLI
+handler for OPEN/READ/SET_MARK/GET_EOF/GET_PREFIX before using it to verify the
+current disk-loading path. AppleWin boot and a copied file-level installation
+were verified after the conversion.
 
 ### `othello_headless.test.ts` (5 tests)
 
@@ -492,8 +492,7 @@ and write to `C:/dev/cx16-othello/vera/build/headless/`.
 2. **8×8 game** — `RETURN` starts a game and the playfield renders.
 3. **Settings + full 10×10 CPU-vs-CPU game** — drives the settings menu (player
    types, size 10, wood board, both stone colours), plays to game-over
-   (57 + 43 = 100 stones), and reads both the asset blocks (900+) and the music
-   blocks (1000+).
+   (57 + 43 = 100 stones), and streams assets and music from ProDOS files.
 4. **Cursor directions** — each Apple //e arrow key moves the cursor one cell in
    the matching screen direction, checked against **both** `curx/cury` and the
    cursor sprite's pixel box (16-px steps), so an inverted axis fails.
@@ -533,9 +532,10 @@ and write to `C:/dev/cx16-othello/vera/build/headless/`.
 2. **Asset pipeline** — `gen_assets.py` converts the X16 tileset, font, help
    pages and palette into a single 42,912-byte blob with a generated offset
    table; `zsm2psg.py` re-voices the YM2151 ZSM soundtrack onto PSG voices 0–3.
-3. **ProDOS streaming** — fixed-block MLI `$80` reads at blocks 900 / 1000,
-   adapted from TimePilot-IIvera; `mli.s` saves and restores zero page `$40-$4F`
-   around every `JSR $BF00`.
+3. **ProDOS streaming** — marker-checked `OTHELLO`, `ASSETS.BIN`, and
+   `MUSIC.PSG` files read with OPEN/SET_MARK/READ; the HDV builder writes
+   timestamps and supports sapling/tree files. `mli.s` saves/restores zero page
+   `$40-$4F` around every `JSR $BF00`.
 4. **Launcher** — Applesoft `STARTUP` compiled by a hand-written tokenizer
    (`applebasic.mjs`), probing slot 5,3,6,7,1,4,2 for the VERA signature and
    `BRUN`-ing the matching payload.

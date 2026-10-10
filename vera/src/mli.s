@@ -24,6 +24,16 @@ mli_blk_lo: .byte 0          ; block number (low)
 mli_blk_hi: .byte 0          ; (high)
 mli_status: .byte 0          ; $00 = success, $27 = I/O error, ...
 
+        .section .data
+        .global mli_open_params, mli_close_params, mli_read_params
+        .global mli_mark_params, mli_prefix_params, mli_eof_params
+mli_open_params:   .byte 3,0,0,0,0,0
+mli_close_params:  .byte 1,0
+mli_read_params:   .byte 4,0,0,0,0,0,0,0
+mli_mark_params:   .byte 2,0,0,0,0
+mli_prefix_params: .byte 1,0,0
+mli_eof_params:    .byte 2,0,0,0,0
+
         .section .bss
         .global mlib_params
 mlib_params:                  ; MLI READ_BLOCK param block (count set at runtime)
@@ -39,6 +49,8 @@ mli_zp_save:
 
         .section .text
         .global mlib_read_block
+        .global mlib_open, mlib_close, mlib_read, mlib_set_mark
+        .global mlib_get_prefix, mlib_get_eof
 mlib_read_block:
         LDA #3                ; param count
         STA mlib_params+0
@@ -118,4 +130,33 @@ mlib_quit:
         .byte $65             ; QUIT ($65)
         .word quit_params
         RTS
+
+        .macro CALL_MLI name, opcode, params
+\name:
+        LDX #15
+.save\@:
+        LDA $40,X
+        STA mli_zp_save,X
+        DEX
+        BPL .save\@
+        JSR $BF00
+        .byte \opcode
+        .word \params
+        STA mli_status
+        LDX #15
+.restore\@:
+        LDA mli_zp_save,X
+        STA $40,X
+        DEX
+        BPL .restore\@
+        LDA mli_status
+        RTS
+        .endmacro
+
+        CALL_MLI mlib_open,       $C8, mli_open_params
+        CALL_MLI mlib_close,      $CC, mli_close_params
+        CALL_MLI mlib_read,       $CA, mli_read_params
+        CALL_MLI mlib_set_mark,   $CE, mli_mark_params
+        CALL_MLI mlib_get_prefix, $C7, mli_prefix_params
+        CALL_MLI mlib_get_eof,    $D1, mli_eof_params
 

@@ -38,6 +38,11 @@ static void disk_error_screen(void) {
 }
 
 int main(void) {
+    /* Probe the optional YM2151 FM daughterboard first, while the VERA address
+     * latches are still at their reset values; the result selects MUSIC.VZM
+     * (PSG + FM) or the PSG-only MUSIC.PSG at audio_start_music(). */
+    audio_detect_fm();
+
     if (!disk_init()) disk_error_screen();
 
     init_screen();
@@ -86,3 +91,4 @@ int main(void) {
         }
     }
 }
+

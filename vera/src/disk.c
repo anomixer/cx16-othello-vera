@@ -19,6 +19,7 @@ extern void mlib_set_mark(void), mlib_get_prefix(void), mlib_get_eof(void);
 
 static uint8_t asset_ref, music_ref;
 static uint8_t asset_open, music_open, io_error;
+static const char *music_name;
 static uint8_t failure_stage;
 static uint8_t failure_status;
 static uint32_t asset_size, music_size;
@@ -118,6 +119,7 @@ uint8_t disk_init(void) {
     uint8_t marker_ref;
     uint32_t marker_size;
     asset_open = music_open = io_error = failure_stage = failure_status = 0;
+    music_name = 0;
     cached_asset_block = 0xFFFF;
 
     /* A dedicated marker prevents unrelated ASSETS.BIN files from another
@@ -140,6 +142,7 @@ uint8_t disk_init(void) {
 }
 
 uint8_t disk_error(void) { return io_error; }
+void disk_clear_error(void) { io_error = 0; }
 uint8_t disk_failure_stage(void) { return failure_stage; }
 uint8_t disk_failure_status(void) { return failure_status; }
 
@@ -182,14 +185,25 @@ void disk_copy_to_ram(uint32_t offset, uint8_t *dest, uint16_t length) {
     }
 }
 
-uint8_t disk_read_music_block(uint16_t block, uint8_t *buf) {
+static uint8_t name_is(const char *a, const char *b) {
+    while (*a && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+
+uint8_t disk_read_music_block(uint16_t block, uint8_t *buf, const char *name) {
     uint32_t offset = (uint32_t)block * FILE_BUFFER_SIZE;
     uint16_t count;
+    if (music_open && !name_is(music_name, name)) {
+        mli_close_params[1] = music_ref;
+        mlib_close();
+        music_open = 0;
+    }
     if (!music_open) {
-        if (!open_file("MUSIC.PSG", MUSIC_IO_BUFFER, &music_ref, &music_size)) {
+        if (!open_file(name, MUSIC_IO_BUFFER, &music_ref, &music_size)) {
             io_error = 1;
             return mli_status ? mli_status : 0x4C;
         }
+        music_name = name;
         music_open = 1;
     }
     if (offset >= music_size) {

@@ -33,7 +33,8 @@ def main(output: Path | None = None, cadius_arg: Path | None = None) -> int:
     out = (output or vera / "cx16-othello.hdv").resolve()
 
     for path in (cadius, build / "STARTUP", build / "main.bin", build / "main4.bin",
-                 generated / "assets.bin", generated / "music.psg"):
+                 generated / "assets.bin", generated / "music.psg",
+                 generated / "music.vzm"):
         if not path.is_file():
             raise FileNotFoundError(f"Required build input not found: {path}")
     for name in ("PRODOS", "BASIC.SYSTEM", "CLOCK.SYSTEM"):
@@ -68,6 +69,7 @@ def main(output: Path | None = None, cadius_arg: Path | None = None) -> int:
         stage_bytes(prodos_name, f"06{load_address:04X}", body)
     stage_bytes("ASSETS.BIN", "060000", (generated / "assets.bin").read_bytes())
     stage_bytes("MUSIC.PSG", "060000", (generated / "music.psg").read_bytes())
+    stage_bytes("MUSIC.VZM", "060000", (generated / "music.vzm").read_bytes())
 
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():

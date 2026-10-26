@@ -94,7 +94,13 @@ mouse_init:
         LDX #0
 mouse_probe_loop:
         CPX #7
-        BCS mouse_init_none
+        BCC mouse_probe_slot
+        ; The no-mouse exit is more than a relative branch away from here, and
+        ; the assembler encodes an out-of-range branch by wrapping the 8-bit
+        ; displacement (it then jumps backwards into the middle of the code).
+        ; Use an absolute jump so the layout can grow without breaking this.
+        JMP mouse_init_none
+mouse_probe_slot:
         LDA mouse_probe_order,X
         JSR mouse_check_slot
         BEQ mouse_found

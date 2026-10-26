@@ -114,6 +114,14 @@ struct __vera {
 
 #define VERA    (*(volatile struct __vera *)VERA_BASE)
 
+/* Optional YM2151 (OPM) FM daughterboard: register select + data/status at
+ * slot + $20 / $21.  The VERA register window itself only decodes five address
+ * bits (reg & $1F), so on a card *without* the FM chip those two addresses
+ * simply alias ADDR_L / ADDR_M.  That aliasing is what the FM probe exploits
+ * (see audio_detect_fm() in src/audio.c). */
+#define VERA_YM_REG     (*(volatile unsigned char *)(VERA_BASE + 0x20))
+#define VERA_YM_DATA    (*(volatile unsigned char *)(VERA_BASE + 0x21))
+
 /* VERA address increment/decrement strides (ADDR_H bits 7:4). */
 #define VERA_DEC_0    ((0 << 1) | 1) << 3
 #define VERA_DEC_1    ((1 << 1) | 1) << 3

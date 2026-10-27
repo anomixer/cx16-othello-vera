@@ -29,8 +29,10 @@ uint8_t input_key_held(void) {
 /* ------------------------------- joystick ------------------------------- */
 #define JOY_REPEAT_FIRST  14      /* frames held before auto-repeat starts */
 #define JOY_REPEAT_RATE    6      /* frames between auto-repeats */
+#define JOY_POLL_EVERY     3      /* paddle sampling cadence (60 fps / 3) */
 
 static uint8_t hasJoystick = 0;
+static uint8_t joyDir = 0;        /* last sampled paddle direction */
 static uint8_t joyPrev = 0;
 static uint8_t joyEdge = 0;
 static uint8_t joyHold = 0;
@@ -86,17 +88,8 @@ void input_init(void) {
     hasJoystick = (x > 30 && x < 225 && y > 30 && y < 225);
 }
 
-void input_update(void) {
-    /* keyboard */
-    if (KBD_DATA & 0x80) {
-        lastKey = KBD_DATA & 0x7F;
-        (void)KBD_STROBE;
-    }
-
-    mouse_poll();
-
-    if (!hasJoystick) return;
-
+/* Direction bits from one paddle sample. */
+static uint8_t sample_paddles(void) {
     uint8_t px = read_pdl(0);
     uint8_t py = read_pdl(1);
     uint8_t dir = 0;
@@ -104,6 +97,33 @@ void input_update(void) {
     else if (px > 145) dir |= JOY_RIGHT;
     if (py < 110) dir |= JOY_UP;
     else if (py > 145) dir |= JOY_DOWN;
+    return dir;
+}
+
+void input_update(void) {
+    static uint8_t pollFrame = 0;
+
+    /* keyboard */
+    if (KBD_DATA & 0x80) {
+        lastKey = KBD_DATA & 0x7F;
+        (void)KBD_STROBE;
+    }
+
+    /* Input is the most expensive part of a frame: mouse_poll() saves and
+     * restores all 192 bytes of zero page around every Mouse Card firmware
+     * call, and read_pdl() busy-waits on the 555 timers.  Polled at 60 Hz that
+     * is enough to push the frame past its 16.7 ms VSYNC slot on every single
+     * frame, which drags the music stream down to ~53 Hz (audible tempo sag)
+     * and leaves no slack for the music prefetch.  Sampling them on alternate
+     * frames (30 Hz pointer, 20 Hz paddles) halves the cost while the digital
+     * reads - keyboard and fire button - stay at 60 Hz. */
+    pollFrame++;
+    if ((pollFrame & 1) == 0) mouse_poll();
+
+    if (!hasJoystick) return;
+
+    if (pollFrame % JOY_POLL_EVERY == 1) joyDir = sample_paddles();
+    uint8_t dir = joyDir;
 
     if (dir != joyPrev) {
         joyEdge |= dir;

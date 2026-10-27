@@ -1,9 +1,11 @@
 /* Apple IIe Time Pilot IIvera — custom linker script.
  *
  * Loads at $1400 instead of $2000, giving up to 33,280 bytes ($1400-$95FF).
- * $1000-$12FF is used by ProDOS QUIT code and must not be overwritten.
- * $1300-$13FF is a BASIC.SYSTEM scratch area; $1400 is the first genuinely
- * free address under ProDOS 2.4.3 + BASIC.SYSTEM.
+ * $1000-$12FF is ProDOS QUIT code and $1300-$13FF is a BASIC.SYSTEM scratch
+ * area; $1400 is the first genuinely free address under ProDOS 2.4.3 +
+ * BASIC.SYSTEM. The game itself never calls MLI QUIT, so its help-page buffer
+ * at $0E00 (1,440 bytes, ending at $139F) may safely overlap those two regions;
+ * see vera/AGENTS.md §2.3. Do not add a quit path without moving that buffer.
  *
  * ProDOS BRUN transfers control to the load address ($1400), so entry point
  * must be at $1400.

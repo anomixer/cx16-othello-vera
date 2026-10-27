@@ -20,6 +20,7 @@ extern uint8_t stone_color1;
 extern uint8_t stone_color2;
 
 uint32_t frameCount = 0;
+uint32_t frameOverruns = 0;   /* frames whose work outlived their VSYNC slot */
 static uint8_t bgscroll = 0;
 
 static uint8_t *const helpBuf = (uint8_t *)0x0E00;   /* 6 x 240 bytes */
@@ -30,8 +31,17 @@ uint32_t frame_ms(void) {
 
 /* ------------------------------ frame pump ------------------------------ */
 void pump_frame(void) {
-    VERA.irq_flags = VERA_IRQ_VSYNC;
-    while ((VERA.irq_flags & VERA_IRQ_VSYNC) == 0) { }
+    /* Wait for the next VSYNC edge.  If one has already arrived while the
+     * previous frame overran its slot, take this frame now instead of clearing
+     * the flag and waiting for the following edge: clearing would throw the
+     * edge away and shift the music by a full 16.7 ms frame (an audible
+     * stumble).  Catching up keeps the stream at ~60 ticks per second. */
+    if ((VERA.irq_flags & VERA_IRQ_VSYNC) == 0) {
+        VERA.irq_flags = VERA_IRQ_VSYNC;
+        while ((VERA.irq_flags & VERA_IRQ_VSYNC) == 0) { }
+    } else {
+        frameOverruns++;
+    }
     VERA.irq_flags = VERA_IRQ_VSYNC;
     frameCount++;
 
@@ -49,6 +59,29 @@ void pump_frame(void) {
         if (my < 0) my = 0;
         set_sprite_px(SPRITE_MOUSE_CURSOR, (uint16_t)my, (uint16_t)mx);
     }
+
+    /* Stage the next music block once the frame's work is done: the MLI read
+     * then overlaps the VSYNC wait instead of delaying the next music tick. */
+    audio_refill();
+
+#ifdef VERA_DEBUG_STATS
+    /* Diagnostic counters for the headless harness: frameCount, frameOverruns,
+     * decoded music ticks, prefetched blocks and prefetch misses, as five
+     * little-endian uint32 at $1B000 (unused bank-1 VRAM).  AppleWin's
+     * -vera-dump then reports them; build with -DVERA_DEBUG_STATS to enable
+     * (the shipping build leaves this out). */
+    {
+        uint32_t values[5];
+        values[0] = frameCount;
+        values[1] = frameOverruns;
+        values[2] = musicTicks;
+        values[3] = musicPrefetches;
+        values[4] = musicFallbacks;
+        vera_set_addr(VERA_INC_BANK1, 0xB000);   /* bank 1, $1B000 */
+        for (uint8_t i = 0; i < 20; i++)
+            VERA.data0 = (uint8_t)(values[i >> 2] >> (8 * (i & 3)));
+    }
+#endif
 }
 
 /* ------------------------------ screen init ----------------------------- */

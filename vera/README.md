@@ -71,6 +71,9 @@ ProDOS  ->  BASIC.SYSTEM  ->  STARTUP (Applesoft, type $FC)
                               |            PSG + FM MUSIC ENABLED
                               |     or:   STATUS: NO YM2151 (OPM) FM CHIP
                               |            PSG MUSIC ONLY
+                              |  prints:  INITIALIZING... PLEASE WAIT ...
+                              |  waits ~3 s (180 VERA VSYNC edges, ~59.5 Hz)
+                              |  prints:  RUNNING CX16-OTHELLO ...
                               v
                             PRINT CHR$(4);"BRUN MAIN.BIN"   (slot 2)
                             PRINT CHR$(4);"BRUN MAIN4.BIN"  (slot 4)
@@ -78,6 +81,13 @@ ProDOS  ->  BASIC.SYSTEM  ->  STARTUP (Applesoft, type $FC)
                               v
                         audio_detect_fm()  -> picks MUSIC.VZM or MUSIC.PSG
 ```
+
+The 3 s "PLEASE WAIT" splash exists because the payload load pushes 42,912 bytes
+of assets into VRAM one byte at a time (about 600 k cycles), so the screen would
+otherwise sit motionless on the BASIC prompt for a couple of seconds. It uses the
+same 180-VSYNC wait as `C:\dev\Time-Pilot\TimePilot-IIvera`, so both ports feel
+the same while booting. The `PLEASE WAIT` line is not decoration — it is the
+honest state of the machine for the next three seconds.
 
 `MAIN.BIN` is a ProDOS type-`$06` binary, load address `$1400`. ProDOS `BRUN`
 jumps straight to `$1400`.
@@ -90,17 +100,28 @@ Memory map (`src/link1000.ld`):
 | `$0050-$00BF` | C zero-page globals |
 | `$0800-$0AFF` | ProDOS workspace / free game RAM |
 | `$0B00-$0B3F` | ProDOS pathname buffer |
-| `$0C00-$0DFF` | music streaming buffer (512-byte record) |
-| `$0E00-$0FFF` | help-page text buffer + ProDOS scratch |
-| `$1400-$54E2` | current program payload, loaded (text + rodata + data) |
-| `$54E3-$5722` | `.bss`, zeroed at startup (not in the BIN) |
-| `$5723-$573B` | `.noinit` (static stack space) |
-| `$573C` | `__heap_start` (payload end) |
+| `$0C00-$0DFF` | music streaming buffer A (512-byte record, Text Page 2 area) |
+| `$0E00-$139F` | help-page text buffer (6 pages × 240 B), loaded from `assets.bin` |
+| `$13A0-$13FF` | ProDOS scratch tail |
+| `$1400-$5745` | current program payload, loaded (text + rodata + data) |
+| `$5746-$5B99` | `.bss`, zeroed at startup (not in the BIN), incl. music buffer B |
+| `$5B9A-$5BB2` | `.noinit` (static stack space) |
+| `$5BB3` | `__heap_start` (payload end) |
 | `$6000-$6BFF` | three ProDOS OPEN I/O buffers (1 KB each) |
 | `$BE00` | soft-stack base (grows down) |
 
-`$1000-$13FF` is deliberately untouched: ProDOS keeps its QUIT code at
-`$1000-$12FF` and BASIC.SYSTEM scratches at `$1300-$13FF`.
+The payload (`MAIN.BIN` / `MAIN4.BIN`) is 17,222 bytes and occupies 34 HDV
+blocks; `STARTUP` is 1,664 bytes / 4 blocks. `__heap_start` is `$5BB3`, so there
+are about 1,100 bytes of headroom before the ProDOS I/O buffers at `$6000` —
+that, not the `0x8800` linker region, is the real limit.
+
+Note that the help buffer at `$0E00` is 1,440 bytes, so it runs to `$139F` and
+does overwrite the ProDOS QUIT / BASIC.SYSTEM scratch area at `$1000-$13FF`.
+That is deliberate and safe here for one reason: the game never returns to
+ProDOS — `mlib_quit` is defined in `src/mli.s` but never called, so the QUIT code
+is dead weight once `BRUN` has jumped to `$1400`. Users exit with RESET or by
+rebooting, not through a ProDOS quit. Do not add a `mlib_quit` call without
+moving the help buffer somewhere that is not `$1000-$13FF`.
 
 ## 3. ProDOS files and HDV
 
@@ -188,7 +209,7 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   A VERA card with the optional YM2151 daughterboard exposes the chip at
   `$Cx20` (register select) and `$Cx21` (data), so the game can play the real FM
   soundtrack there; on a card without the chip it plays the PSG-only stream.
-  Both are streamed from ProDOS at `$0C00` and advanced by VSYNC at ~60 Hz.
+  Both are streamed from ProDOS and advanced by VSYNC at ~60 Hz.
   * `MUSIC.VZM` — the FM version. PSG voices 4–15 are passed through natively and
     every YM2151 register write is replayed. At start-up the game keys off all
     eight FM channels and zeroes their registers so the de-duplicated stream
@@ -203,6 +224,22 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
     `ADDR_L`/`ADDR_M` on a card without the chip, so writing `$5A/$A5` and
     reading both bytes back identifies the card. `STARTUP` performs the same
     probe in Applesoft and prints the result before `BRUN` (see §2).
+  * **Two buffers, read one record ahead.** The player keeps the *next* 512-byte
+    record in a second buffer — A at `$0C00`, B in `.bss` — and only swaps them
+    at a record boundary, so a music tick never has to wait for a disk read.
+    `audio_refill()` (called at the end of every frame) fills the idle buffer
+    with `block + 1`; if the prefetch is missing, the tick falls back to the old
+    synchronous read. This is what removed the "music jerks a little" stutter:
+    a ProDOS read of 512 bytes costs ~4 ms, which is a quarter of a frame and
+    used to land *inside* the tick.
+* **Frame budget.** The music tempo *is* the frame rate (one VSYNC = one tick),
+  so the frame work was cut until it fits: the VSYNC wait no longer clears a
+  pending edge (a frame that overran keeps its already-latched edge instead of
+  throwing it away), the Apple Mouse Card is polled every 2nd frame (30 Hz) and
+  the 555 paddles every 3rd (20 Hz), and the music read happens in the frame
+  tail. With a Mouse Card fitted that gives 58–59 fps instead of the earlier
+  ~36 fps; the residual ~2 % slow-down is inaudible and is the cost of the
+  192-byte zero-page save/restore in the mouse driver.
 * **Sprite X/Y are raw pixels.** The X16 stores sprite `X_LO = X >> 1`; this
   implementation uses `byte2 | (byte3 & 3) << 8` directly as the pixel
   coordinate, so `set_sprite()` writing `posx << 4` lands exactly on the 16-pixel
@@ -331,11 +368,12 @@ cd C:\dev\applewin\release
 
 Measured with the shipping image (AppleWin 1.32.1.0, the `anomixer` VERA fork,
 40 M cycles, slot 2): FM on →
-title screen plus music with a peak sample around 15,300–16,000 (no clipping)
+title screen plus music with a peak sample around 13,900–14,500 (no clipping)
 and audible sub-500 Hz energy that `MUSIC.PSG` cannot produce; FM off → the same
-tune from `MUSIC.PSG`, peak 8,176, thin in the bass; slot 4 → the game boots and
+tune from `MUSIC.PSG`, peak 7,731, thin in the bass; slot 4 → the game boots and
 plays as well (verified from the `$C4xx` traffic in `VERA.log` and the matching
-audio envelope).
+audio envelope). Audio starts at ≈6.2 s of emulated time: ~3.0 s of `PLEASE
+WAIT` plus ~3.2 s of asset streaming.
 
 ## 6. Running it for real
 
@@ -354,10 +392,16 @@ audio envelope).
 
 * Asset streaming costs about 600 k cycles (tiles + font + palette + help are
   pushed to VRAM one byte at a time). Expect a visible pause of a couple of
-  seconds between `BRUN` and the title screen.
+  seconds between `BRUN` and the title screen — the `STARTUP` splash prints
+  `INITIALIZING... PLEASE WAIT ...` for ~3 s before that, so the total from
+  boot to title is ≈6 s of emulated time.
 * Both music streams are streamed from disk 512 bytes at a time, so `MUSIC.VZM`
-  costs 388 blocks and `MUSIC.PSG` 309; the 800 KB volume still has 680 blocks
-  free after both are installed.
+  costs 388 blocks and `MUSIC.PSG` 309; the 800 KB volume still has 677 blocks
+  free after both are installed. The streaming uses two 512-byte buffers (A at
+  `$0C00`, B in `.bss`) with the next record prefetched during the frame.
+* The game runs at ≈58–59 fps with an Apple Mouse Card and ≈59.5 fps without,
+  because music tempo is tied to VSYNC. Playing 2 % slow is inaudible; there is
+  no separate timer to drift against.
 * The FM loop point is tick 1536 (≈ 25.6 s of music). Because the AppleWin audio
   capture stops at 20 s, the loop is verified by replaying the stream
   (`tools/verify_music_streams.mjs`, 0 mismatched ticks) rather than by ear.

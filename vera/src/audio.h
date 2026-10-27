@@ -24,6 +24,7 @@ void audio_detect_fm(void);
 
 void audio_init(void);
 void audio_service(void);                 /* call once per frame */
+void audio_refill(void);                  /* call at the end of every frame */
 void audio_start_music(void);
 void audio_stop_music(void);
 void audio_play_thumb(void);
@@ -36,5 +37,10 @@ void audio_play_thumb(void);
 
 extern uint8_t music;                     /* YES = background music enabled */
 extern uint8_t fm_present;                /* YES = YM2151 FM chip detected  */
+
+/* Diagnostics for the headless harness (-DVERA_DEBUG_STATS; see pump_frame). */
+extern uint32_t musicTicks;               /* music ticks decoded so far */
+extern uint32_t musicPrefetches;          /* 512-byte blocks read ahead */
+extern uint32_t musicFallbacks;           /* block reads that missed the prefetch */
 
 #endif /* _AUDIO_H */

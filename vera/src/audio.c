@@ -47,17 +47,29 @@
 
 #define YM_KEY_REG      0x08            /* OPM key on/off: opmask 6:3, ch 2:0 */
 
-/* Streaming buffer: Text Page 2 area, free under ProDOS. */
-static uint8_t *const musicBuf = (uint8_t *)0x0C00;
+/* Streaming buffers.  Both records are one 512-byte ProDOS block; they are
+ * alternated so the next block can be read into the idle one while the current
+ * one still plays.  Buffer A is the Text Page 2 area (free under ProDOS);
+ * buffer B is regular .bss, which keeps the payload well below $6000. */
+static uint8_t *const musicBufA = (uint8_t *)0x0C00;
+static uint8_t musicBufB[BLOCK_BYTES];
 
 uint8_t music = YES;
 uint8_t fm_present = NO;
 
+/* Diagnostics (see the comment above pump_frame's VERA_DEBUG_STATS block). */
+uint32_t musicTicks;
+uint32_t musicPrefetches;
+uint32_t musicFallbacks;
+
 static uint8_t  musicActive;
 static uint8_t  musicDelay;
 static uint8_t  musicFm;                /* 1 = MUSIC.VZM (PSG + FM) */
-static uint16_t musicBlock;
-static uint16_t musicPos;
+static uint8_t *musicCur = musicBufA;   /* record currently being decoded */
+static uint8_t  musicPre;               /* 1 = the other buffer holds block+1 */
+static uint16_t musicBlock;             /* block index loaded into musicCur */
+static uint16_t musicPos;               /* next byte inside musicCur */
+static uint8_t  musicNeedPrefetch;      /* 1 = read block musicBlock+1 later */
 
 static uint8_t  sfxActive;
 static uint8_t  sfxDelay;
@@ -123,10 +135,12 @@ void audio_detect_fm(void) {
 static void music_seek(uint16_t offset) {
     musicBlock = offset / BLOCK_BYTES;
     musicPos   = offset % BLOCK_BYTES;
-    disk_read_music_block(musicBlock, musicBuf,
+    musicCur   = musicBufA;
+    musicPre   = 0;
+    musicNeedPrefetch = 1;
+    disk_read_music_block(musicBlock, musicCur,
                           musicFm ? MUSIC_FILE_VZM : MUSIC_FILE_PSG);
 }
-
 static void music_start(void) {
     musicActive = 1;
     musicDelay  = 0;
@@ -160,12 +174,24 @@ void audio_stop_music(void) {
 
 static uint8_t music_peek(void) {
     if (musicPos >= BLOCK_BYTES) {
+        if (musicPre) {
+            /* The next record was staged by audio_refill(): swap buffers and
+             * keep playing, so a block boundary costs no disk I/O at all. */
+            musicCur = (musicCur == musicBufA) ? musicBufB : musicBufA;
+            musicBlock++;
+            musicPre = 0;
+        } else {
+            /* Prefetch missed (e.g. the frame that would have staged it was
+             * delayed): fall back to the synchronous read. */
+            musicBlock++;
+            musicFallbacks++;
+            disk_read_music_block(musicBlock, musicCur,
+                                  musicFm ? MUSIC_FILE_VZM : MUSIC_FILE_PSG);
+        }
         musicPos = 0;
-        musicBlock++;
-        disk_read_music_block(musicBlock, musicBuf,
-                              musicFm ? MUSIC_FILE_VZM : MUSIC_FILE_PSG);
+        musicNeedPrefetch = 1;
     }
-    return musicBuf[musicPos++];
+    return musicCur[musicPos++];
 }
 
 /* MUSIC.PSG: 0x80|reg,value writes; 0x00..0xFE waits; 0xFF loops. */
@@ -228,8 +254,30 @@ static void music_tick_vzm(void) {
 static void music_tick(void) {
     if (!musicActive) return;
     if (musicDelay) { musicDelay--; return; }
+    musicTicks++;
     if (musicFm) music_tick_vzm();
     else         music_tick_psg();
+}
+
+/* Stage the next music block while the frame is otherwise idle.
+ *
+ * pump_frame() calls this at the very end of a frame, so the MLI read (several
+ * milliseconds on a real drive) overwrites the VSYNC wait window instead of
+ * sitting between two music ticks.  Reading one block inside a tick is what
+ * made playback stumble once per 512-byte record; with the read moved into the
+ * idle window the tick that crosses a block boundary just swaps buffers. */
+void audio_refill(void) {
+    uint8_t *idle;
+
+    if (!musicActive || !musicNeedPrefetch || musicPre) return;
+    musicNeedPrefetch = 0;
+
+    idle = (musicCur == musicBufA) ? musicBufB : musicBufA;
+    if (!disk_read_music_block((uint16_t)(musicBlock + 1), idle,
+                               musicFm ? MUSIC_FILE_VZM : MUSIC_FILE_PSG)) {
+        musicPre = 1;
+        musicPrefetches++;
+    }
 }
 
 /* ------------------------------- sound fx ------------------------------- */
@@ -266,6 +314,9 @@ void audio_init(void) {
     musicActive = 0;
     musicDelay  = 0;
     musicFm     = 0;
+    musicCur    = musicBufA;
+    musicPre    = 0;
+    musicNeedPrefetch = 0;
     sfxActive   = 0;
     sfxDelay    = 0;
     sfxPos      = 0;

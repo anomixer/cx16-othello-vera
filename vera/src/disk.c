@@ -207,7 +207,9 @@ uint8_t disk_read_music_block(uint16_t block, uint8_t *buf, const char *name) {
         music_open = 1;
     }
     if (offset >= music_size) {
-        io_error = 1;
+        /* Reading one block past the end is how audio_refill() discovers EOF
+         * while staging the next record; that is not an I/O error, so it must
+         * not raise the sticky flag (which would pop the error screen). */
         return 0x4C;
     }
     count = music_size - offset > FILE_BUFFER_SIZE

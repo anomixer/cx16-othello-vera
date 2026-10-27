@@ -42,7 +42,8 @@ Seven steps:
    the concatenated `assets.bin` and `generated/asset_table.h`.
 2. `tools\zsm2psg.py` — converts `../assets/sound/*.zsm` into the VERA PSG
    stream `generated/music.psg` plus `generated/music_table.h`. This is the
-   **PSG-only** music used when no YM2151 FM chip is fitted.
+   **last-resort PSG-only** music, used only when no YM2151 FM chip is fitted
+   *and* `OTHELLO.PCM` is missing (a copied installation).
 3. `tools\gen_music.mjs` (which uses `tools\zsm2vera.mjs`) — converts the same
    ZSM into `generated/music.vzm`, the **PSG + YM2151** stream, and emits
    `generated/music_vzm.h` (`MUSIC_VZM_SIZE`, `MUSIC_VZM_LOOP`,
@@ -73,13 +74,18 @@ so `llvm-objdump` can read it). It is not part of the shipping image.
 ```
 ProDOS  ->  BASIC.SYSTEM  ->  STARTUP (Applesoft, type $FC)
                               |
+                              |  read-only OPEN of OTHELLO.PCM through MLI
+                              |  (absolute /CX16.OTHELLO path, then the current
+                              |  prefix; always CLOSEd again, never created)
                               |  probes $C200 (slot 2) then $C400 (slot 4)
                               |  by writing VERA ADDR_L/ADDR_H and reading back
                               |  probes the YM2151 at $Cx20/$Cx21 (write/read-back)
                               |  prints:  STATUS: YM2151 (OPM) FM CHIP FOUND
                               |            PSG + FM MUSIC ENABLED
                               |     or:   STATUS: NO YM2151 (OPM) FM CHIP
-                              |            PSG MUSIC ONLY
+                              |            PCM MUSIC STREAMING
+                              |              (PSG MUSIC ONLY - NO PCM FILE when
+                              |               the read-only OPEN above failed)
                               |  prints:  INITIALIZING... PLEASE WAIT ...
                               |  waits ~3 s (180 VERA VSYNC edges, ~59.5 Hz)
                               |  prints:  RUNNING CX16-OTHELLO ...
@@ -121,7 +127,7 @@ Memory map (`src/link1000.ld`):
 | `$BE00` | soft-stack base (grows down) |
 
 The payload (`MAIN.BIN` / `MAIN4.BIN`) is 19,548 bytes and occupies 39 HDV
-blocks; `STARTUP` is 1,664 bytes / 4 blocks. `__heap_start` is `$6A91`, so there
+blocks; `STARTUP` is 2,538 bytes / 5 blocks. `__heap_start` is `$6A91`, so there
 are about 1,390 bytes of headroom before the ProDOS I/O buffers at `$7000` —
 that, not the `0x8800` linker region, is the real limit, and `link1000.ld` ends
 with an `ASSERT` so an overflow fails the link.
@@ -223,8 +229,9 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
 * **Audio.** The X16 build plays YM2151 FM music through the ZSMKit library.
   A VERA card with the optional YM2151 daughterboard exposes the chip at
   `$Cx20` (register select) and `$Cx21` (data), so the game can play the real FM
-  soundtrack there; on a card without the chip it plays the PSG-only stream.
-  Both are streamed from ProDOS and advanced by VSYNC at ~60 Hz.
+  soundtrack there; on a card without the chip it streams the pre-rendered
+  `OTHELLO.PCM` (falling back to the PSG-only stream only if that file is
+  missing). All are streamed from ProDOS and advanced by VSYNC at ~60 Hz.
   * `MUSIC.VZM` — the FM version. PSG voices 4–15 are passed through natively and
     every YM2151 register write is replayed. At start-up the game keys off all
     eight FM channels and zeroes their registers so the de-duplicated stream
@@ -418,7 +425,8 @@ WAIT` plus ~3.2 s of asset streaming.
   reachable over HTTP, e.g. the copy in this repo's GitHub release.)
 * **Real hardware**: the card may sit in slot 2 (`$C200`) or slot 4 (`$C400`);
   STARTUP probes both. With the YM2151 daughterboard fitted you get FM+PSG
-  music, without it PSG-only music — no configuration needed on the game side.
+  music; without it the pre-rendered `OTHELLO.PCM` soundtrack (PSG-only only if
+  that file is missing) — no configuration needed on the game side.
 
 ## 7. Known constraints
 
@@ -426,12 +434,13 @@ WAIT` plus ~3.2 s of asset streaming.
   pushed to VRAM one byte at a time). Expect a visible pause of a couple of
   seconds between `BRUN` and the title screen — the `STARTUP` splash prints
   `INITIALIZING... PLEASE WAIT ...` for ~3 s before that, so the total from
-  boot to title is ≈6 s of emulated time.
+  boot to title is ≈7 s of emulated time (≈0.3 s of it is the launcher's
+  read-only `OTHELLO.PCM` OPEN probe).
 * `MUSIC.VZM` (388 blocks) and `MUSIC.PSG` (309) are streamed from disk 512
   bytes at a time, using two 512-byte buffers (A at `$0C00`, B in `.bss`) with
   the next record prefetched during the frame. `OTHELLO.PCM` (2,271 blocks) is
   streamed by raw block reads instead, because the file-level cost (22.7 ms per
-  call) would starve the FIFO. The 1700 KB volume has 186 blocks free with all
+  call) would starve the FIFO. The 1700 KB volume has 185 blocks free with all
   three installed.
 * The image no longer fits an 800 KB floppy: `OTHELLO.PCM` alone is
   1,162,243 B. That is the accepted trade-off for a soundtrack with real bass

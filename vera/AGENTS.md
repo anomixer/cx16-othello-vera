@@ -19,7 +19,7 @@ each one was discovered by breaking the game, and each has a regression test.
   [Apple2TS](https://apple2ts.com) and [AppleWin](https://github.com/anomixer/AppleWin)
   emulators.
 - **Build output**: `cx16-othello.hdv` — a 1700 KB bootable ProDOS 2.4.3 fixed
-  disk image (3,400 blocks, 186 free). It no longer fits an 800 KB floppy: the
+  disk image (3,400 blocks, 185 free). It no longer fits an 800 KB floppy: the
   pre-rendered soundtrack `OTHELLO.PCM` (1,162,243 B = 2,271 blocks) takes two
   thirds of the volume.
 - **Toolchain**: `llvm-mos-sdk` (`mos-apple2e-clang`), Python 3 + Pillow +
@@ -116,8 +116,8 @@ $C200/$C400   VERA registers (+ $20/$21 YM2151 when the FM board is fitted)
 
 Binary format: Apple II `BIN` header = 2-byte load address `$1400` + 2-byte
 length; `main.bin` is 19,548 bytes of payload (`__data_end` = `$605C`, `.bss`
-ends at `$6A78`, 39 blocks of the HDV). `STARTUP` is 1,664 bytes (Applesoft
-type `$FC`, aux `$0801`, 4 blocks).
+ends at `$6A78`, 39 blocks of the HDV). `STARTUP` is 2,538 bytes (Applesoft
+type `$FC`, aux `$0801`, 5 blocks).
 
 Note that the payload is free to grow: `link1000.ld` declares a `ram` region of
 `0x8800` bytes from `$1400` to `$9C00`, and the ProDOS OPEN buffers and the MLI
@@ -330,9 +330,42 @@ STATUS: YM2151 (OPM) FM CHIP FOUND
 PSG + FM MUSIC ENABLED
 ```
 
-or `STATUS: NO YM2151 (OPM) FM CHIP` / `PSG MUSIC ONLY`, so a user can see which
-build behaviour they are getting. The BASIC probe writes `$C200/$C201` and reads
-`$C220/$C221` (slot 4: `$C400/$C401` / `$C420/$C421`) and restores `$C200/$C201`.
+or `STATUS: NO YM2151 (OPM) FM CHIP` followed by the **music source** line, so a
+user can see which build behaviour they are getting. The BASIC probe writes
+`$C200/$C201` and reads `$C220/$C221` (slot 4: `$C400/$C401` / `$C420/$C421`) and
+restores `$C200/$C201`.
+
+**The no-FM line is a file probe, not an assumption.** `STARTUP` used to print
+`PSG MUSIC ONLY` on every no-FM machine, which the port had already outgrown: the
+normal no-FM path is the pre-rendered `OTHELLO.PCM` (§3.11.1). It now prints
+`PCM MUSIC STREAMING`, and `PSG MUSIC ONLY - NO PCM FILE` only when
+`OTHELLO.PCM` is genuinely absent (a copied installation). The check is a
+**read-only MLI OPEN + CLOSE** issued from BASIC — `OPEN` (`$C8`) never creates a
+file when the caller supplies no access byte, which is exactly what
+`disk_start_music()` relies on for its own missing-file fallback:
+
+- Stubs and parameter blocks are poked into page 3 by `STARTUP`
+  (`$0300` = `JSR $BF00 / .byte $C8 / .word $0330 / STA $0320 / ...`, `$0310` =
+  the same shape for `CLOSE` `$CC`), following the **inline** MLI convention: the
+  command byte and the parameter-block word sit directly after the `JSR`, and MLI
+  returns to `ret+3`. A/X/Y-based calls are wrong (§7.x on page 3).
+- `$0330` = `count 3`, path pointer, I/O buffer pointer `$7000` (free until the
+  payload loads), ref out. The pathname is a Pascal string at `$0340`.
+- Two attempts, both read-only: the absolute path `/CX16.OTHELLO/OTHELLO.PCM`
+  first, then the bare `OTHELLO.PCM`. The absolute attempt is needed because
+  ProDOS boots `BASIC.SYSTEM` with an **empty prefix** on the packaged HDV, and an
+  empty prefix cannot resolve a relative name — a relative-only probe reported
+  `$40` on every run. The relative attempt keeps copied installations working
+  when their prefix points somewhere else.
+- A successful OPEN is always followed by `CLOSE`, so no ProDOS file slot or I/O
+  buffer is left behind. Measured: PCM image → status `$00`; 800 KB no-PCM image
+  → status `$40` on both attempts. The probe costs ≈0.3 s of boot (one tree-file
+  `OPEN`), and a failed OPEN does **not** abort the later
+  `PRINT CHR$(4);"BRUN MAIN.BIN"` — the no-PCM image still boots to the title and
+  plays `MUSIC.PSG` (verified by WAV: max 8,176).
+- The earlier CATALOG-screen scan approach was dropped: it flashed the directory,
+  needed `HOME` afterwards, and its 1,013-iteration Applesoft compare loop made
+  the launcher far slower than the whole payload boot.
 
 **VZM ("VERA ZSM") stream format** — `tools/zsm2vera.mjs` emits it, `audio.c`
 decodes it. There is no header; each byte is a command:
@@ -723,9 +756,11 @@ vera/
 ### 4.2 Boot chain
 
 ```
-ProDOS STARTUP (Applesoft, 1,664 B, type $FC, aux $0801)
+ProDOS STARTUP (Applesoft, 2,538 B, type $FC, aux $0801)
+  → read-only MLI OPEN/CLOSE probe of OTHELLO.PCM (absolute, then prefix-relative)
   → probes VERA at slot 2 ($C200), then slot 4 ($C400) by write/read-back
-  → probes the YM2151 at $Cx20/$Cx21 and PRINTs the STATUS lines
+  → probes the YM2151 at $Cx20/$Cx21 and PRINTs the STATUS + music-source lines
+    ("PCM MUSIC STREAMING", or "PSG MUSIC ONLY - NO PCM FILE" when the OPEN failed)
   → PRINTs "INITIALIZING... PLEASE WAIT ..." and waits ~3 s (180 VSYNC edges)
   → PRINTs "RUNNING CX16-OTHELLO ..."
   → BRUN MAIN.BIN  (slot 2)  or  MAIN4.BIN (slot 4)
@@ -736,12 +771,14 @@ ProDOS STARTUP (Applesoft, 1,664 B, type $FC, aux $0801)
      → main loop: pump_frame() → input → game/menu state machine
 ```
 
-`STARTUP` lines 84-92 + subroutine 200-280 in `src/startup.bas`: it picks the
-VERA slot (`S = 2` / `S = 4`), maps it to the ISR address (`V = 49671` = `$C207`
-/ `V = 50183` = `$C407`), then spins `FOR F = 1 TO 180` clearing the VSYNC flag
-with `POKE V,1` and waiting for bit 0 with `PEEK(V) AND 1`. At ~59.5 Hz that is
-3.02 s of "PLEASE WAIT" on screen. The same pattern is used by
-`C:\dev\Time-Pilot\TimePilot-IIvera`, which keeps the boot feel consistent.
+`STARTUP` lines 12-13 + subroutines 700/900/1200 in `src/startup.bas` do the
+file probe (`$C8` OPEN / `$CC` CLOSE stubs in page 3, see §3.11); subroutine
+200-280 then runs the splash: it picks the VERA slot (`S = 2` / `S = 4`), maps it
+to the ISR address (`V = 49671` = `$C207` / `V = 50183` = `$C407`), then spins
+`FOR F = 1 TO 180` clearing the VSYNC flag with `POKE V,1` and waiting for bit 0
+with `PEEK(V) AND 1`. At ~59.5 Hz that is 3.02 s of "PLEASE WAIT" on screen. The
+same pattern is used by `C:\dev\Time-Pilot\TimePilot-IIvera`, which keeps the
+boot feel consistent.
 
 ### 4.3 HDV layout (3,400 blocks)
 
@@ -754,7 +791,7 @@ adds eleven files to its root:
 | `BASIC.SYSTEM` | 20 | 10,240 | interpreter for `STARTUP` |
 | `CLOCK.SYSTEM` | 6 | 2,678 | clock driver |
 | `OTHELLO` | 1 | 7 | installation marker (7-byte file, only its presence matters) |
-| `STARTUP` | 4 | 1,664 | Applesoft launcher (type `$FC`, aux `$0801`) |
+| `STARTUP` | 5 | 2,538 | Applesoft launcher (type `$FC`, aux `$0801`) |
 | `MAIN.BIN` | 39 | 19,548 | slot-2 payload (type `$06`, aux `$1400`) |
 | `MAIN4.BIN` | 39 | 19,548 | slot-4 payload (`-DVERA_BASE=0xC400`) |
 | `ASSETS.BIN` | 84 | 42,912 | tiles + font + help + palette blob |
@@ -762,7 +799,7 @@ adds eleven files to its root:
 | `MUSIC.VZM` | 388 | 198,656 | PSG + YM2151 music, used when FM is present |
 | `OTHELLO.PCM` | 2,271 | 1,162,243 | 8 kHz soundtrack, used when no FM board |
 
-That is 186 blocks free on the 3,400-block volume. The 1700 KB size is forced by
+That is 185 blocks free on the 3,400-block volume. The 1700 KB size is forced by
 `OTHELLO.PCM`: at 800 KB the image would not hold the soundtrack, so the shipping
 HDV no longer fits a floppy (packaging option A — keep VZM + PSG as fallbacks).
 
@@ -951,18 +988,21 @@ applies to the slot the card is installed in — set both `Slot 2` and `Slot 4` 
 you test both.
 
 **5.7.2 Expected measurements (shipping build).** All figures below were
-re-measured on the current build (`main.bin` 19,548 B, `STARTUP` 1,664 B,
+re-measured on the current build (`main.bin` 19,548 B, `STARTUP` 2,538 B,
 `MUSIC.VZM` 388 blocks, `OTHELLO.PCM` 2,271 blocks) with a 40 M-cycle slot-2 run
 unless stated otherwise.
-"Splash" = the 3 s `PLEASE WAIT` window, so audio starts ≈6.2 s into the
-capture instead of ≈4.4 s.
+"Splash" = the 3 s `PLEASE WAIT` window, so audio starts ≈7 s into the
+capture instead of ≈4.4 s. The launcher's `OTHELLO.PCM` OPEN probe accounts
+for ≈0.3 s of that (6.78 s with the probe disabled); the rest is the 3 s
+splash plus the asset load.
 
 | Run | Result |
 | :--- | :--- |
-| FM = 1, slot 2, 40 M cycles | title screen in the VRAM dump: layer-0 map has all 1024 entries set to tile 1 (the solid background tile, moved by the diagonal scroll), layer-1 map has 129 non-zero entries (title text, the 6×6 sample board with its border, and the three menu lines), palette `00 00 ff 0f`, ≈42 of 64 game tiles written, sprite 0 at (0,0); WAV (20 s) is silent for the first **6.185 s** (3.0 s splash + asset load), then per-second rms ≈1,294 / 656 / 280 / 110 / 1,493 / 880 / 371 / 150 / 2,281 / 3,950 / 4,009 / 4,078 / 3,943 / 4,145, max sample **13,863–14,540** across runs (no clipping). Spectrum of the last second: ≈0.29 below 500 Hz, 0.30 at 500 Hz–2 kHz, 0.19 at 2–6 kHz, 0.20 at 6–20 kHz — the FM partials `MUSIC.PSG` cannot make |
-| FM = 0, slot 2 | title screen identical (layer-1 map 129 non-zero, palette `00 00 ff 0f`). This build now plays `OTHELLO.PCM`: WAV first audible **6.0 s**, max sample **11,040** (volume 12), per-second rms 934 / 562 / 254 / 150 / 1,049 / 698 / 313 / 166 / 1,721 / 3,110 / 3,276 / 3,174 / 3,238 / 3,296, spectrum 0.30 / 0.30 / 0.13 / 0.26 — the bass is back, which is what the PSG-only stream could not do (0.03) |
+| FM = 1, slot 2, 40 M cycles | title screen in the VRAM dump: layer-0 map has all 1024 entries set to tile 1 (the solid background tile, moved by the diagonal scroll), layer-1 map has 129 non-zero entries (title text, the 6×6 sample board with its border, and the three menu lines), palette `00 00 ff 0f`, ≈42 of 64 game tiles written, sprite 0 at (0,0); WAV (20 s) is silent for the first **6.96 s** (3.0 s splash + asset load), then per-second rms ≈1,827 / 763 / 325 / 124 / 2,224 / 1,049 / 447 / 175 / 3,179 / 3,937 / 4,366 / 3,697 / 4,368, max sample **13,863–15,851** across runs (no clipping). Spectrum of the last second: ≈0.29 below 500 Hz, 0.30 at 500 Hz–2 kHz, 0.19 at 2–6 kHz, 0.20 at 6–20 kHz — the FM partials `MUSIC.PSG` cannot make |
+| FM = 0, slot 2 | title screen identical (layer-1 map 129 non-zero, palette `00 00 ff 0f`). This build now plays `OTHELLO.PCM`: WAV first audible **7.10 s**, max sample **11,040** (volume 12), per-second rms 994 / 471 / 221 / 140 / 1,128 / 588 / 269 / 152 / 2,141 / 3,064 / 3,465 / 2,913 / 3,516, spectrum 0.30 / 0.30 / 0.13 / 0.26 — the bass is back, which is what the PSG-only stream could not do (0.03) |
 | FM = 0, PCM stream rate | 833 frames per 25 M cycles = **34.1 fps**, 147,968 B fed, `pcmFallbacks` 0 (the file-level reader gives 24.1 fps); the PCM FIFO drains 8,011 B/s and playback starts ≈6.2 s in |
 | FM = 1, slot 4, 40 M cycles | `VERA.log` shows the slot-4 launch (`$C405`, `$C400`/`$C401` write/read-back, then tile/map/PSG traffic, ≈53 k lines); WAV rms per 4 s: 0 / 1,053 / 1,267 / 3,591 / 4,133 |
+| FM = 0, no `OTHELLO.PCM` (800 KB image) | the launcher takes the fallback branch (`PSG MUSIC ONLY - NO PCM FILE`) and the failed read-only `OPEN` does **not** disturb the boot: title screen identical, WAV first audible **7.09 s**, max sample **8,176** (`MUSIC.PSG`, the same value measured before the PCM soundtrack existed) |
 | pristine HEAD HDV, either setting | WAV is **all zeros** — the `mouse_init()` branch overflow (§3.14) stops the boot before `audio_start_music()` |
 
 `$C22x` appears **zero** times in `VERA.log` in *every* run above, including the

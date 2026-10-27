@@ -19,7 +19,7 @@ each one was discovered by breaking the game, and each has a regression test.
   [Apple2TS](https://apple2ts.com) and [AppleWin](https://github.com/anomixer/AppleWin)
   emulators.
 - **Build output**: `cx16-othello.hdv` — a 1700 KB bootable ProDOS 2.4.3 fixed
-  disk image (3,400 blocks, 185 free). It no longer fits an 800 KB floppy: the
+  disk image (3,400 blocks, 183 free). It no longer fits an 800 KB floppy: the
   pre-rendered soundtrack `OTHELLO.PCM` (1,162,243 B = 2,271 blocks) takes two
   thirds of the volume.
 - **Toolchain**: `llvm-mos-sdk` (`mos-apple2e-clang`), Python 3 + Pillow +
@@ -43,9 +43,9 @@ each one was discovered by breaking the game, and each has a regression test.
 
 ### 2.1 Register window
 
-VERA occupies the Apple II slot I/O space at `VERA_BASE + $00..$21`
-(`VERA_BASE = $C200` for slot 2, `$C400` for slot 4). The optional YM2151 FM
-daughterboard adds two write-only registers at `$20`/`$21`.
+VERA uses the Cx register window (`$C200` for slot 2, `$C400` for slot 4).
+YM2151 uses separate device-select ports: `$C0A0/$C0A1` for slot 2 and
+`$C0C0/$C0C1` for slot 4 (register select / data and status).
 
 | Offset | Register | Notes |
 | :--- | :--- | :--- |
@@ -58,7 +58,7 @@ daughterboard adds two write-only registers at `$20`/`$21`.
 | `$0D-$13` | Layer 0 | config, mapbase, tilebase, hscroll(2), vscroll(2), reserved(2) |
 | `$14-$1A` | Layer 1 | same 7-byte shape |
 | `$1B-$1D` | `AUDIO_CTRL` / `AUDIO_RATE` / `AUDIO_DATA` | PCM FIFO: `CTRL` bit 7 = FIFO reset, bit 6 = restart, bit 5 = 16-bit, bit 4 = stereo, bits 3:0 = volume through the card LUT `{0,1,2,3,4,5,6,8,11,14,18,23,30,38,49,64}`, `(v & $C0) == $C0` loops; `RATE` 21 = 48828.125/128 × 21 = **8010.86 Hz**; `DATA` = one mono 8-bit signed sample. FIFO 4,096 B, and **it never reports full** |
-| `$20` / `$21` | `YM_REG` / `YM_DATA` | YM2151 FM daughterboard, **write-only**. With no daughterboard fitted the card aliases these to `ADDR_L` / `ADDR_M` (`reg & 0x1F`), which is exactly what `audio_detect_fm()` exploits. |
+| device select `$C0A0/$C0A1` or `$C0C0/$C0C1` | `YM_REG` / `YM_DATA` | YM2151 select and data/status, slot 2 or slot 4 respectively. |
 
 **Composer window registers are DCSEL-selected.** To touch
 `hstart / hstop / vstart / vstop` you must set `CONTROL = $02` (DCSEL 1), write
@@ -100,7 +100,7 @@ $0E00-$139F   Help page buffer (6 x 240 B at $0E00); it runs into the
                                called (see the note after this map)
 $13A0-$13FF   ProDOS scratch tail, also overlapped by the help buffer
 $1400-$5CE0   Current program payload, loaded (text 18,589 B + rodata 841 B +
-                               data 50 B); __data_end = $605C
+                               data 50 B); __data_end = $607A
 $6200-$6A77   .bss, zeroed at startup (not in the BIN), 512-aligned so that
                                pcmfeed.s can address a buffer from offset 0:
                                musicBufB (512), pcm_master and pcm_index
@@ -111,12 +111,12 @@ $6A91         __heap_start (payload end; only used if malloc is called)
 $7000-$7BFF   Three page-aligned 1 KB ProDOS OPEN buffers
 $BE00         __stack    soft stack grows down from here
 $BF00         ProDOS MLI entry
-$C200/$C400   VERA registers (+ $20/$21 YM2151 when the FM board is fitted)
+$C200/$C400   VERA registers; FM uses $C0A0/$C0A1 or $C0C0/$C0C1
 ```
 
 Binary format: Apple II `BIN` header = 2-byte load address `$1400` + 2-byte
-length; `main.bin` is 19,548 bytes of payload (`__data_end` = `$605C`, `.bss`
-ends at `$6A78`, 39 blocks of the HDV). `STARTUP` is 2,538 bytes (Applesoft
+length; `main.bin` is 19,578 bytes of payload (`__data_end` = `$605C`, `.bss`
+ends at `$6A78`, 39 blocks of the HDV). `STARTUP` is 3,080 bytes (Applesoft
 type `$FC`, aux `$0801`, 5 blocks).
 
 Note that the payload is free to grow: `link1000.ld` declares a `ram` region of
@@ -308,43 +308,14 @@ record buffered ahead:
 
 Frame pacing matters as much as the buffering — see §3.15.
 
-**FM detection (`audio_detect_fm()`, first thing in `main()`).** The VERA
-daughterboard maps the YM2151 at `$Cx20`/`$Cx21`, but the card decodes only five
-address bits (`reg & 0x1F`), so on a card *without* the FM chip those reads
-alias `ADDR_L`/`ADDR_M`. The probe is therefore a write/read-back test:
-
-```c
-VERA.control = 0x00;               /* ADDRSEL = 0, DCSEL = 0 */
-VERA.address = 0xA55A;             /* ADDR_L = $5A, ADDR_M = $A5 */
-fm_present = (VERA_YM_REG != 0x5A || VERA_YM_DATA != 0xA5) ? YES : NO;
-/* then restore the address latches that were saved on entry */
-```
-
-Both bytes must be checked: one of them alone can match by accident. Measured in
-AppleWin: FM enabled → reads `$00/$00` → `fm_present = 1`; FM disabled →
-reads `$5A/$A5` → `fm_present = 0`. `STARTUP` runs the same probe in Applesoft
-(before `BRUN`) and prints either
-
-```
-STATUS: YM2151 (OPM) FM CHIP FOUND
-PSG + FM MUSIC ENABLED
-```
-
-or `STATUS: NO YM2151 (OPM) FM CHIP` followed by the **music source** line, so a
-user can see which build behaviour they are getting. The BASIC probe writes
-`$C200/$C201` and reads `$C220/$C221` (slot 4: `$C400/$C401` / `$C420/$C421`) and
-restores `$C200/$C201`.
-
-**The polarity of the BASIC flag is the opposite of the C one.** `STARTUP` starts
-with `F = 1` (*assume a chip is fitted*) and clears it to 0 only when the reads
-come back as `$5A/$A5` — which is the **aliasing** case, i.e. **no chip**. So
-`F = 1` means "FM present", and the branch that prints the FOUND lines must test
-`IF F = 1`. Testing `F = 0` there inverts both lines: an FM machine reports
-`NO YM2151` + `PCM MUSIC STREAMING` while actually playing `MUSIC.VZM`, and a
-no-FM machine reports `FM CHIP FOUND` + `PSG + FM` while playing `OTHELLO.PCM`.
-That is a banner-only bug — the audio path comes from the C probe, which is
-independent — and it is easy to miss precisely because the music sounds right.
-See §7 #34 for the fix and the text-page read-back that proves it.
+**FM detection (`audio_detect_fm()` and STARTUP).** Both execute the same
+71-byte YM2151 BUSY probe at `$0300`, with the result at `$02FF`. It verifies
+reserved status bits, writes register `$14` to clear timer flags, requires
+BUSY to assert and then clear within a bounded wait. This does not modify VERA
+address latches. STARTUP uses page 3 only after its PCM OPEN/CLOSE probe; the
+main program copies the slot-specific bytes from `src/fm_probe.h` to page 3.
+The probe was adapted from `veratest/src/vera_fm_detect.inc` with AI assistance.
+Old Cx20/Cx21 alias-readback detection is invalid on the new mapping.
 
 **The no-FM line is a file probe, not an assumption.** `STARTUP` used to print
 `PSG MUSIC ONLY` on every no-FM machine, which the port had already outgrown: the
@@ -805,8 +776,8 @@ adds eleven files to its root:
 | `CLOCK.SYSTEM` | 6 | 2,678 | clock driver |
 | `OTHELLO` | 1 | 7 | installation marker (7-byte file, only its presence matters) |
 | `STARTUP` | 5 | 2,538 | Applesoft launcher (type `$FC`, aux `$0801`) |
-| `MAIN.BIN` | 39 | 19,548 | slot-2 payload (type `$06`, aux `$1400`) |
-| `MAIN4.BIN` | 39 | 19,548 | slot-4 payload (`-DVERA_BASE=0xC400`) |
+| `MAIN.BIN` | 39 | 19,578 | slot-2 payload (type `$06`, aux `$1400`) |
+| `MAIN4.BIN` | 39 | 19,578 | slot-4 payload (`-DVERA_BASE=0xC400`) |
 | `ASSETS.BIN` | 84 | 42,912 | tiles + font + help + palette blob |
 | `MUSIC.PSG` | 309 | 157,956 | PSG-only music, the last-resort fallback |
 | `MUSIC.VZM` | 388 | 198,656 | PSG + YM2151 music, used when FM is present |
@@ -1001,7 +972,7 @@ applies to the slot the card is installed in — set both `Slot 2` and `Slot 4` 
 you test both.
 
 **5.7.2 Expected measurements (shipping build).** All figures below were
-re-measured on the current build (`main.bin` 19,548 B, `STARTUP` 2,538 B,
+re-measured on the current build (`main.bin` 19,578 B, `STARTUP` 2,538 B,
 `MUSIC.VZM` 388 blocks, `OTHELLO.PCM` 2,271 blocks) with a 40 M-cycle slot-2 run
 unless stated otherwise.
 "Splash" = the 3 s `PLEASE WAIT` window, so audio starts ≈7 s into the
@@ -1376,3 +1347,21 @@ were verified after the conversion.
   are legitimately zero (tile 0 = `TILE_NONE`).
 - `build/` holds only `main.bin`, `main.bin.elf`, `main.elf`, `main.map`,
   `main4.bin`, `main4.bin.elf`, `STARTUP`, and `headless/`.
+
+### Current FM mapping (2026-10-28)
+
+Slot 2 uses `$C0A0/$C0A1`; slot 4 uses `$C0C0/$C0C1`. Previous
+sections describing Cx20/Cx21 FM mapping or alias-based detection are historical.
+STARTUP's probe DATA and `src/fm_probe.h` are copies of the same 71-byte
+slot-specific veratest BUSY probe; update both together if the probe changes.
+`FMTEST`-era AppleWin builds with the old mapping are incompatible.
+
+AppleWin Release verification: slot 2 and slot 4 both reported `fm_present=1`
+with FM enabled and `0` with FM disabled. All four runs produced music; FM-on
+peaks were 15826/15616 and PCM-fallback peaks 11040/11040. The rebuilt HDV
+passed Cadius CHECKVOLUME, and `verify_music_streams.mjs` found 0 mismatched
+ticks. Real hardware and listening remain to be checked.
+
+The Apple II port uses `vera/assets/help.hlp` as its help source; page 1
+credits ?A2VERA port by anomixer 2026.? The asset generator packs each page
+into twelve 20-character rows.

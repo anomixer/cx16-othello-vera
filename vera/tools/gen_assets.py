@@ -96,9 +96,8 @@ def build_font() -> bytes:
 
 
 def build_help() -> bytes:
-    src = ROOT.parent / "src" / "help.hlp"
-    if not src.exists():
-        src = ROOT / "assets" / "help.hlp"
+    # The Apple II port maintains its own help text and credits.
+    src = ROOT / "assets" / "help.hlp"
     pages, cur, parsing = [], bytearray(), False
     for line in src.read_text(encoding="utf-8").splitlines():
         if line.startswith("#"):

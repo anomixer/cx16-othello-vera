@@ -18,7 +18,7 @@
 //                          1 + (D-1) = D tick timing of the X16 player.
 //   $80-$BF  PSG write   : register = byte & $3F ($1F9C0 + reg), next byte value
 //   $C0-$DF  FM batch    : count = (byte & $1F) + 1, then count x (reg, value)
-//                          pairs written to YM_REG/YM_DATA ($Cs20/$Cs21)
+//                          pairs written to YM_REG/YM_DATA ($C0A0/$C0A1 (slot 2), $C0C0/$C0C1 (slot 4))
 //   $E0-$FE  no-op       : padding / reserved, skipped without consuming a tick
 //   $FF      end of song : the player seeks to the loop offset (or restarts)
 //

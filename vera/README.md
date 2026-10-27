@@ -79,7 +79,7 @@ ProDOS  ->  BASIC.SYSTEM  ->  STARTUP (Applesoft, type $FC)
                               |  prefix; always CLOSEd again, never created)
                               |  probes $C200 (slot 2) then $C400 (slot 4)
                               |  by writing VERA ADDR_L/ADDR_H and reading back
-                              |  probes the YM2151 at $Cx20/$Cx21 (write/read-back)
+                              |  probes YM2151 BUSY at $C0A1 (slot 2) or $C0C1 (slot 4)
                               |  prints:  STATUS: YM2151 (OPM) FM CHIP FOUND
                               |            PSG + FM MUSIC ENABLED
                               |     or:   STATUS: NO YM2151 (OPM) FM CHIP
@@ -119,15 +119,15 @@ Memory map (`src/link1000.ld`):
 | `$0C00-$0DFF` | music streaming buffer A (512-byte record, Text Page 2 area) |
 | `$0E00-$139F` | help-page text buffer (6 pages × 240 B), loaded from `assets.bin` |
 | `$13A0-$13FF` | ProDOS scratch tail |
-| `$1400-$605B` | current program payload, loaded (text + rodata + data) |
+| `$1400-$6079` | current program payload, loaded (text + rodata + data) |
 | `$6200-$6A77` | `.bss`, zeroed at startup (not in the BIN): music buffer B, the PCM block-map index blocks (512 B each, 256-aligned) and stream state |
 | `$6A78-$6A90` | `.noinit` (static stack space) |
 | `$6A91` | `__heap_start` (payload end) |
 | `$7000-$7BFF` | three ProDOS OPEN I/O buffers (1 KB each) |
 | `$BE00` | soft-stack base (grows down) |
 
-The payload (`MAIN.BIN` / `MAIN4.BIN`) is 19,548 bytes and occupies 39 HDV
-blocks; `STARTUP` is 2,538 bytes / 5 blocks. `__heap_start` is `$6A91`, so there
+The payload (`MAIN.BIN` / `MAIN4.BIN`) is 19,578 bytes and occupies 39 HDV
+blocks; `STARTUP` is 3,080 bytes / 7 blocks. `__heap_start` is `$6A91`, so there
 are about 1,390 bytes of headroom before the ProDOS I/O buffers at `$7000` —
 that, not the `0x8800` linker region, is the real limit, and `link1000.ld` ends
 with an `ASSERT` so an overflow fails the link.
@@ -180,9 +180,8 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   32-register VERA map is exposed compressed (`reg & 0x1F`): `$00-$02` address,
   `$03/$04` DATA0/DATA1, `$05` CTRL, `$06/$07` IRQ, `$08` VCOUNT, `$09-$0C`
   display-control (selected by `DCSEL`), `$0D-$13` layer 0, `$14-$1A` layer 1,
-  `$1B-$1D` PCM, `$1E/$1F` SPI, and `$20/$21` the optional YM2151 FM
-  daughterboard (write-only `YM_REG` / `YM_DATA`; those two offsets alias
-  `ADDR_L`/`ADDR_M` when the chip is absent).
+  `$1B-$1D` PCM and `$1E/$1F` SPI. YM2151 uses device-select addresses
+  `$C0A0/$C0A1` (slot 2) or `$C0C0/$C0C1` (slot 4).
 * **`ADDR_H` encoding** is `bit0 = VRAM bank`, `bit1 = fx_nibble_bit`,
   `bit2 = fx_nibble_incr`, `bits 7:3 = stride index`. The X16 puts the bank in
   bit 7. `VERA_INC_1 = $10`, `VERA_INC_BANK1 = $11` (see `src/apple2e.h`).
@@ -228,7 +227,7 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   DATA0 exactly like the X16.
 * **Audio.** The X16 build plays YM2151 FM music through the ZSMKit library.
   A VERA card with the optional YM2151 daughterboard exposes the chip at
-  `$Cx20` (register select) and `$Cx21` (data), so the game can play the real FM
+  `$C0A0/$C0A1` (slot 2) or `$C0C0/$C0C1` (slot 4), so the game can play the real FM
   soundtrack there; on a card without the chip it streams the pre-rendered
   `OTHELLO.PCM` (falling back to the PSG-only stream only if that file is
   missing). All are streamed from ProDOS and advanced by VSYNC at ~60 Hz.
@@ -256,10 +255,8 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
     nothing in stream size and measured a 17,072 peak against the 11,040 music
     peak at volume 12 — clearly audible, and the sum still peaks under full
     scale.
-  * Detection is a write/read-back test at boot: `$Cx20`/`$Cx21` alias
-    `ADDR_L`/`ADDR_M` on a card without the chip, so writing `$5A/$A5` and
-    reading both bytes back identifies the card. `STARTUP` performs the same
-    probe in Applesoft and prints the result before `BRUN` (see §2).
+  * Detection checks the YM2151 status and its BUSY transition with a bounded
+    wait. STARTUP and the game use the same probe before selecting the music.
   * **Two buffers, read one record ahead.** The player keeps the *next* 512-byte
     record in a second buffer — A at `$0C00`, B in `.bss` — and only swaps them
     at a record boundary, so a music tick never has to wait for a disk read.
@@ -392,7 +389,7 @@ cd C:\dev\applewin\release
   line: `HKCU\Software\AppleWin\CurrentVersion\Configuration\Slot 2` →
   `FM Card Enabled` = `"1"` or `"0"` (same key under `Slot 4` for slot 4).
   AppleWin treats a missing value as *enabled*.
-* `VERA.log` never shows `$C22x` writes even when FM is working — that branch
+* `VERA.log` may not show FM port writes even when FM is working — that branch
   returns before the logging call. Judge FM from the WAV and from the
   `STATUS:` line STARTUP prints on screen.
 * Run it with the desktop unlocked. AppleWin drives emulation from its window /
@@ -440,7 +437,7 @@ WAIT` plus ~3.2 s of asset streaming.
   bytes at a time, using two 512-byte buffers (A at `$0C00`, B in `.bss`) with
   the next record prefetched during the frame. `OTHELLO.PCM` (2,271 blocks) is
   streamed by raw block reads instead, because the file-level cost (22.7 ms per
-  call) would starve the FIFO. The 1700 KB volume has 185 blocks free with all
+  call) would starve the FIFO. The 1700 KB volume has 183 blocks free with all
   three installed.
 * The image no longer fits an 800 KB floppy: `OTHELLO.PCM` alone is
   1,162,243 B. That is the accepted trade-off for a soundtrack with real bass
@@ -471,3 +468,9 @@ WAIT` plus ~3.2 s of asset streaming.
   slot 5: the pointer followed the host cursor and clicks selected the title
   menu rows (`(H) HELP` → help page, `(ENTER) START` → game), so the
   `mx >> 4` tile mapping and the menu hit test are known good.
+
+FM I/O mapping was updated with AI assistance: slot 2 uses `$C0A0/$C0A1` and slot 4 uses `$C0C0/$C0C1`. Older AppleWin builds with the former mapping are incompatible.
+
+The Apple II port uses `vera/assets/help.hlp` as its help source; page 1
+credits ?A2VERA port by anomixer 2026.? The asset generator packs each page
+into twelve 20-character rows.

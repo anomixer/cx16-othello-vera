@@ -10,9 +10,10 @@
 // by tools/zsm2psg.py and stays in the image for cards without an FM chip.
 import fs from "fs"
 import path from "path"
+import { fileURLToPath } from "node:url"
 import { convertZsmToVeraStream } from "./zsm2vera.mjs"
 
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, "$1"))
+const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, "..")
 const gen = path.join(root, "generated")
 const zsmPath = path.join(root, "assets", "othello.zsm")
@@ -21,7 +22,8 @@ const zsmPath = path.join(root, "assets", "othello.zsm")
 // Mirrors the loop-point mapping in tools/zsm2psg.py: ZSM delays advance the
 // tick counter, and the first command at/after the loop offset starts the tick
 // that playback resumes from.
-const zsmLoopTick = (zsm) => {
+// Also imported by tools/gen_pcm.mjs, which needs the same loop tick.
+export const zsmLoopTick = (zsm) => {
   const loopOffset = zsm[3] | (zsm[4] << 8) | (zsm[5] << 16)
   if (!(loopOffset > 16 && loopOffset < zsm.length)) return 0
   let ptr = 16
@@ -88,4 +90,5 @@ const main = () => {
   if (loop.offset > 0xffff) throw new Error("VZM loop offset exceeds 16 bits")
 }
 
-main()
+/* Run only when invoked directly: tools/gen_pcm.mjs imports zsmLoopTick. */
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

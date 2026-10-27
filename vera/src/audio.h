@@ -1,17 +1,20 @@
 /* audio.h - VERA 16-channel PSG engine + optional YM2151 FM chip.
  *
- *   * The Commander X16 ZSM soundtrack is converted at build time into two
+ *   * The Commander X16 ZSM soundtrack is converted at build time into three
  *     streams:
- *       MUSIC.PSG - PSG-only, used when the FM daughterboard is absent
- *                   (tools/zsm2psg.py: FM re-voiced onto PSG voices 0..3).
- *       MUSIC.VZM - PSG + YM2151 FM, used when the FM chip is detected
- *                   (tools/zsm2vera.mjs / tools/gen_music.mjs).
- *     Both are streamed from the HDV one 512-byte block at a time.
+ *       OTHELLO.PCM - whole soundtrack rendered offline at 8 kHz (no FM board;
+ *                     carries the bass and FM timbre the PSG re-voicing lacks)
+ *       MUSIC.PSG   - PSG-only fallback (tools/zsm2psg.py)
+ *       MUSIC.VZM   - PSG + YM2151 FM, used when the FM chip is detected
+ *                     (tools/zsm2vera.mjs / tools/gen_music.mjs).
+ *     All three are streamed from the HDV one 512-byte block at a time.
  *   * Sound effects: the short "thumb" click is a native PSG stream embedded
- *     in the binary.
+ *     in the binary, replayed on every voice the music does not use so it is
+ *     audible over the arrangement.
  *
  * Everything is driven at 60 Hz from audio_service(), which the game calls once
- * per frame (synchronised to VERA VSYNC).
+ * per frame (synchronised to VERA VSYNC).  The PCM FIFO needs its own per-frame
+ * top-up, done by audio_feed_pcm().
  */
 #ifndef _AUDIO_H
 #define _AUDIO_H
@@ -24,6 +27,7 @@ void audio_detect_fm(void);
 
 void audio_init(void);
 void audio_service(void);                 /* call once per frame */
+void audio_feed_pcm(void);                /* top up the PCM FIFO; call once per frame */
 void audio_refill(void);                  /* call at the end of every frame */
 void audio_start_music(void);
 void audio_stop_music(void);
@@ -42,5 +46,7 @@ extern uint8_t fm_present;                /* YES = YM2151 FM chip detected  */
 extern uint32_t musicTicks;               /* music ticks decoded so far */
 extern uint32_t musicPrefetches;          /* 512-byte blocks read ahead */
 extern uint32_t musicFallbacks;           /* block reads that missed the prefetch */
+extern uint32_t pcmBytesFed;              /* bytes handed to the PCM FIFO */
+extern uint32_t pcmFallbacks;             /* PCM block reads that missed the prefetch */
 
 #endif /* _AUDIO_H */

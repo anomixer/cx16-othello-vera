@@ -9,6 +9,10 @@
  *
  * ProDOS BRUN transfers control to the load address ($1400), so entry point
  * must be at $1400.
+ *
+ * The three page-aligned 1 KB ProDOS OPEN buffers live at $7000-$7BFF (see
+ * src/disk.c), so the payload must end below $7000.  The assert at the end of
+ * this file fails the link if it ever grows into them.
  */
 
 /* Provide imaginary (zero page) registers.  Apple II zero page $00-$01 is
@@ -46,6 +50,11 @@ SECTIONS {
 
 /* Soft stack grows down from $BE00 (same as stock apple2e). */
 __stack = 0xBE00;
+
+/* The ProDOS OPEN buffers at $7000-$7BFF are not allocated by this region, so
+ * guard the boundary here instead of failing at run time. */
+ASSERT(__heap_start < 0x7000,
+       "payload overflows the ProDOS I/O buffers at $7000")
 
 OUTPUT_FORMAT {
     /* ProDOS BIN header: 2-byte load address ($1400) + 2-byte length. */

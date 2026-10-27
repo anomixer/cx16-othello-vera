@@ -1,4 +1,4 @@
-/* video.c - VERA tile/sprite rendering layer for the Apple II VERA port.
+﻿/* video.c - VERA tile/sprite rendering layer for the Apple II VERA port.
  *
  * Port of the Commander X16 original by Ivo Filot (GPL v3).  The VERA layer,
  * tilemap, palette and sprite code is unchanged; assets are streamed from the
@@ -47,6 +47,7 @@ void pump_frame(void) {
 
     input_update();
     audio_service();
+    audio_feed_pcm();
     update_background_diagonal();
 
     /* The X16 kernel moved the hardware mouse pointer; here sprite 0 is the
@@ -64,21 +65,24 @@ void pump_frame(void) {
      * then overlaps the VSYNC wait instead of delaying the next music tick. */
     audio_refill();
 
+
 #ifdef VERA_DEBUG_STATS
     /* Diagnostic counters for the headless harness: frameCount, frameOverruns,
-     * decoded music ticks, prefetched blocks and prefetch misses, as five
-     * little-endian uint32 at $1B000 (unused bank-1 VRAM).  AppleWin's
-     * -vera-dump then reports them; build with -DVERA_DEBUG_STATS to enable
-     * (the shipping build leaves this out). */
+     * decoded music ticks, prefetched blocks, prefetch misses, PCM bytes fed
+     * and PCM prefetch misses, as seven little-endian uint32 at $1B000 (unused
+     * bank-1 VRAM).  AppleWin's -vera-dump then reports them; build with
+     * -DVERA_DEBUG_STATS to enable (the shipping build leaves this out). */
     {
-        uint32_t values[5];
+        uint32_t values[7];
         values[0] = frameCount;
         values[1] = frameOverruns;
         values[2] = musicTicks;
         values[3] = musicPrefetches;
         values[4] = musicFallbacks;
+        values[5] = pcmBytesFed;
+        values[6] = pcmFallbacks;
         vera_set_addr(VERA_INC_BANK1, 0xB000);   /* bank 1, $1B000 */
-        for (uint8_t i = 0; i < 20; i++)
+        for (uint8_t i = 0; i < 28; i++)
             VERA.data0 = (uint8_t)(values[i >> 2] >> (8 * (i & 3)));
     }
 #endif
@@ -316,4 +320,9 @@ void set_mouse_pointer(uint8_t tile_id) {
     VERA.data0 = (uint8_t)(graph_addr >> 5);
     VERA.data0 = (uint8_t)((graph_addr >> 13) | (1 << 7));
 }
+
+
+
+
+
 

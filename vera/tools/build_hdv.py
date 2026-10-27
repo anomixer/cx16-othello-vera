@@ -41,6 +41,12 @@ def main(output: Path | None = None, cadius_arg: Path | None = None) -> int:
         if not (system_dir / f"{name}#FF0000").is_file():
             raise FileNotFoundError(f"ProDOS system file not found: {system_dir / name}")
 
+    # OTHELLO.PCM is optional: a machine without melodius still builds, and the
+    # game then falls back to MUSIC.PSG.  With it the volume has to grow from
+    # 800 KB (1600 blocks) to 1,700 KB (3400 blocks) to hold 2,271 more blocks.
+    pcm = generated / "othello.pcm"
+    volume_size = "1700KB" if pcm.is_file() else "800KB"
+
     stage = build / "cadius-files"
     if stage.exists():
         shutil.rmtree(stage)
@@ -70,11 +76,14 @@ def main(output: Path | None = None, cadius_arg: Path | None = None) -> int:
     stage_bytes("ASSETS.BIN", "060000", (generated / "assets.bin").read_bytes())
     stage_bytes("MUSIC.PSG", "060000", (generated / "music.psg").read_bytes())
     stage_bytes("MUSIC.VZM", "060000", (generated / "music.vzm").read_bytes())
+    if pcm.is_file():
+        stage_bytes("OTHELLO.PCM", "060000", pcm.read_bytes())
 
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         out.unlink()
-    subprocess.run([str(cadius), "CREATEVOLUME", str(out), VOLUME_NAME, "800KB"], check=True)
+    subprocess.run([str(cadius), "CREATEVOLUME", str(out), VOLUME_NAME, volume_size],
+                   check=True)
     for name in ("PRODOS", "BASIC.SYSTEM", "CLOCK.SYSTEM"):
         cadius_add(cadius, out, system_dir / f"{name}#FF0000")
     for source in staged:

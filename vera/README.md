@@ -10,8 +10,11 @@ colours, diagonal background scrolling, help pages, keyboard + joystick +
 Apple Mouse Card input, sound effects and the "Corridors of Time" background
 music.
 
-The shipped artifact is `cx16-othello.hdv`, an 800 KB ProDOS hard-image that
-boots from BASIC.SYSTEM.
+The shipped artifact is `cx16-othello.hdv`, a 1700 KB ProDOS hard-image that
+boots from BASIC.SYSTEM. It is deliberately larger than a floppy: on a machine
+without the YM2151 FM daughterboard the game now plays a pre-rendered 8 kHz
+soundtrack (`OTHELLO.PCM`, 1.16 MB) instead of the thin-sounding PSG-only
+version, and that file does not fit in 800 KB.
 
 ---
 
@@ -31,7 +34,7 @@ Requirements (all already present on this machine):
 | Node.js | `node` on PATH |
 | Cadius | bundled as `tools\cadius.exe` |
 
-Six steps:
+Seven steps:
 
 1. `tools\gen_assets.py` — reads the original X16 artwork PNGs
    (`../assets/tiles`, `../assets/font`, `../assets/palette`, `../assets/scripts`)
@@ -44,11 +47,17 @@ Six steps:
    ZSM into `generated/music.vzm`, the **PSG + YM2151** stream, and emits
    `generated/music_vzm.h` (`MUSIC_VZM_SIZE`, `MUSIC_VZM_LOOP`,
    `MUSIC_VZM_TICKS`).
-4. `tools\gen_startup.mjs` — compiles `src/startup.bas` to an Applesoft binary
+4. `tools\gen_pcm.mjs` — renders the same ZSM through **melodius** (YM2151 +
+   PSG), band-limits it to 4 kHz and resamples it to 8,010.864 Hz, producing
+   `generated/othello.pcm` (1,162,243 B) and `generated/pcm_table.h`
+   (`PCM_SIZE`, `PCM_BLOCKS`, `PCM_LOOP_OFFSET`, …). This is the soundtrack
+   played through the VERA PCM FIFO when no FM chip is fitted.
+5. `tools\gen_startup.mjs` — compiles `src/startup.bas` to an Applesoft binary
    `build/STARTUP` (type `$FC`, aux `$0801`).
-5. Two compile passes with `src/link1000.ld`: `build/main.bin` (VERA at
+6. Two compile passes with `src/link1000.ld`: `build/main.bin` (VERA at
    `$C200`, slot 2) and `build/main4.bin` (`-DVERA_BASE=0xC400`, slot 4).
-6. `tools\build_hdv.py` — uses bundled Cadius to create an 800 KB
+   `src/pcmfeed.s` is part of both images.
+7. `tools\build_hdv.py` — uses bundled Cadius to create a 1700 KB
    `CX16.OTHELLO` volume and add the ProDOS system and game files.
 
 `node tools\verify_music_streams.mjs` re-converts the ZSM, diffs the result
@@ -79,7 +88,8 @@ ProDOS  ->  BASIC.SYSTEM  ->  STARTUP (Applesoft, type $FC)
                             PRINT CHR$(4);"BRUN MAIN4.BIN"  (slot 4)
                               |
                               v
-                        audio_detect_fm()  -> picks MUSIC.VZM or MUSIC.PSG
+                        audio_detect_fm()  -> picks MUSIC.VZM, OTHELLO.PCM
+                                              or MUSIC.PSG
 ```
 
 The 3 s "PLEASE WAIT" splash exists because the payload load pushes 42,912 bytes
@@ -103,17 +113,18 @@ Memory map (`src/link1000.ld`):
 | `$0C00-$0DFF` | music streaming buffer A (512-byte record, Text Page 2 area) |
 | `$0E00-$139F` | help-page text buffer (6 pages × 240 B), loaded from `assets.bin` |
 | `$13A0-$13FF` | ProDOS scratch tail |
-| `$1400-$5745` | current program payload, loaded (text + rodata + data) |
-| `$5746-$5B99` | `.bss`, zeroed at startup (not in the BIN), incl. music buffer B |
-| `$5B9A-$5BB2` | `.noinit` (static stack space) |
-| `$5BB3` | `__heap_start` (payload end) |
-| `$6000-$6BFF` | three ProDOS OPEN I/O buffers (1 KB each) |
+| `$1400-$605B` | current program payload, loaded (text + rodata + data) |
+| `$6200-$6A77` | `.bss`, zeroed at startup (not in the BIN): music buffer B, the PCM block-map index blocks (512 B each, 256-aligned) and stream state |
+| `$6A78-$6A90` | `.noinit` (static stack space) |
+| `$6A91` | `__heap_start` (payload end) |
+| `$7000-$7BFF` | three ProDOS OPEN I/O buffers (1 KB each) |
 | `$BE00` | soft-stack base (grows down) |
 
-The payload (`MAIN.BIN` / `MAIN4.BIN`) is 17,222 bytes and occupies 34 HDV
-blocks; `STARTUP` is 1,664 bytes / 4 blocks. `__heap_start` is `$5BB3`, so there
-are about 1,100 bytes of headroom before the ProDOS I/O buffers at `$6000` —
-that, not the `0x8800` linker region, is the real limit.
+The payload (`MAIN.BIN` / `MAIN4.BIN`) is 19,548 bytes and occupies 39 HDV
+blocks; `STARTUP` is 1,664 bytes / 4 blocks. `__heap_start` is `$6A91`, so there
+are about 1,390 bytes of headroom before the ProDOS I/O buffers at `$7000` —
+that, not the `0x8800` linker region, is the real limit, and `link1000.ld` ends
+with an `ASSERT` so an overflow fails the link.
 
 Note that the help buffer at `$0E00` is 1,440 bytes, so it runs to `$139F` and
 does overwrite the ProDOS QUIT / BASIC.SYSTEM scratch area at `$1000-$13FF`.
@@ -128,24 +139,28 @@ moving the help buffer somewhere that is not `$1000-$13FF`.
 The bootable HDV is named `CX16.OTHELLO`. Cadius creates the volume and adds
 the ProDOS system files and game content as normal ProDOS files in its root
 directory: `OTHELLO` (game marker), `STARTUP`, `MAIN.BIN`, `MAIN4.BIN`,
-`ASSETS.BIN`, `MUSIC.PSG` and `MUSIC.VZM`. Cadius handles directory entries,
+`ASSETS.BIN`, `MUSIC.PSG`, `MUSIC.VZM` and `OTHELLO.PCM`. Cadius handles
+directory entries,
 file block allocation, and file dates. The extracted system files used by the
 build are kept in `assets/prodos-system/`.
 
 | File | Blocks | Used when |
 | --- | ---: | --- |
-| `MUSIC.PSG` | 309 | no YM2151 FM chip (PSG-only, FM channels re-voiced onto voices 0–3) |
 | `MUSIC.VZM` | 388 | YM2151 FM chip present (native PSG voices 4–15 + real FM writes) |
+| `OTHELLO.PCM` | 2,271 | no FM chip (the normal no-FM path): the whole soundtrack pre-rendered to 8 kHz and played through the PCM FIFO |
+| `MUSIC.PSG` | 309 | no FM chip *and* no `OTHELLO.PCM` — last-resort fallback |
 
 The game verifies the `OTHELLO` marker before opening `ASSETS.BIN`; this keeps
 unrelated copies of the common asset filename from being used accidentally.
-Assets and music are streamed with ProDOS OPEN/READ/SET_MARK calls. The HDV
-uses three distinct, page-aligned 1 KB ProDOS I/O buffers at `$6000`, `$6400`,
-and `$6800`.
+Assets and music are streamed with ProDOS OPEN/READ/SET_MARK calls (the PCM
+soundtrack is the exception — it uses raw MLI `READ_BLOCK` calls and a ProDOS
+block map, §4). The HDV uses three distinct, page-aligned 1 KB ProDOS I/O
+buffers at `$7000`, `$7400`, and `$7800`.
 
 File-level installation has been tested successfully from another ProDOS
 volume and subdirectory. Copy `OTHELLO`, `STARTUP`, `MAIN.BIN`, `MAIN4.BIN`,
-`ASSETS.BIN`, `MUSIC.PSG` and `MUSIC.VZM` to the target directory, then set the
+`ASSETS.BIN`, `MUSIC.PSG`, `MUSIC.VZM` and `OTHELLO.PCM` to the target
+directory, then set the
 ProDOS prefix to that directory before launching `STARTUP` (or BRUN the matching
 `MAIN.BIN` / `MAIN4.BIN`). The marker, assets, and music are resolved relative
 to the active prefix. If `MUSIC.VZM` is missing, a machine with FM simply plays
@@ -218,8 +233,22 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
   * `MUSIC.PSG` — the fallback. `tools/zsm2psg.py` re-voices the four FM
     channels onto PSG voices 0–3 (channels 3–6) and passes native voices 4–15
     through unchanged.
-  * The thumb-placement SFX lives on PSG voice 3 (registers 12–15), which
-    neither stream touches, so it never collides with the music.
+  * `OTHELLO.PCM` — the no-FM soundtrack. `tools/gen_pcm.mjs` renders the ZSM
+    through melodius, band-limits it to 4 kHz and resamples it to 8,010.864 Hz
+    (PCM rate register 21). The 6502 pushes 128-byte chunks into the PCM FIFO
+    with `src/pcmfeed.s` whenever ISR bit 3 reports the FIFO below 1,024 bytes,
+    so the stream self-regulates and the PCM clock — being independent of VSYNC
+    — keeps the tempo right even at 34 fps. The file is read with raw MLI
+    `READ_BLOCK` calls through a ProDOS block map (file block → index block →
+    data block): a file-level read costs 22.7 ms and would cap the game at
+    24 fps, while a block read costs 4.6 ms. The card's PCM volume is set to 12
+    of 15 so the music leaves room for the sound effects.
+  * The thumb-placement SFX is replayed on PSG voices 0–3 in PCM mode (all
+    sixteen voices are free there), on 0/1/3 with `MUSIC.VZM`, and on voice 3
+    alone with `MUSIC.PSG`. Repeating each register write per voice costs
+    nothing in stream size and measured a 17,072 peak against the 11,040 music
+    peak at volume 12 — clearly audible, and the sum still peaks under full
+    scale.
   * Detection is a write/read-back test at boot: `$Cx20`/`$Cx21` alias
     `ADDR_L`/`ADDR_M` on a card without the chip, so writing `$5A/$A5` and
     reading both bytes back identifies the card. `STARTUP` performs the same
@@ -232,14 +261,17 @@ The Apple II VERA card is **not** bit-identical to the X16's VERA:
     synchronous read. This is what removed the "music jerks a little" stutter:
     a ProDOS read of 512 bytes costs ~4 ms, which is a quarter of a frame and
     used to land *inside* the tick.
-* **Frame budget.** The music tempo *is* the frame rate (one VSYNC = one tick),
-  so the frame work was cut until it fits: the VSYNC wait no longer clears a
+* **Frame budget.** For the PSG/FM streams the music tempo *is* the frame rate
+  (one VSYNC = one tick), so the frame work was cut until it fits: the VSYNC wait no longer clears a
   pending edge (a frame that overran keeps its already-latched edge instead of
   throwing it away), the Apple Mouse Card is polled every 2nd frame (30 Hz) and
   the 555 paddles every 3rd (20 Hz), and the music read happens in the frame
   tail. With a Mouse Card fitted that gives 58–59 fps instead of the earlier
   ~36 fps; the residual ~2 % slow-down is inaudible and is the cost of the
-  192-byte zero-page save/restore in the mouse driver.
+  192-byte zero-page save/restore in the mouse driver. With `OTHELLO.PCM`
+  playing, feeding the FIFO is the dominant cost and the game runs at ≈34 fps
+  (measured: 833 frames per 24.49 s); the soundtrack itself keeps time because
+  the PCM clock is hardware-driven.
 * **Sprite X/Y are raw pixels.** The X16 stores sprite `X_LO = X >> 1`; this
   implementation uses `byte2 | (byte3 & 3) << 8` directly as the pixel
   coordinate, so `set_sprite()` writing `posx << 4` lands exactly on the 16-pixel
@@ -367,11 +399,11 @@ cd C:\dev\applewin\release
   `(ENTER) START` starts a game), which exercises the whole mouse path.
 
 Measured with the shipping image (AppleWin 1.32.1.0, the `anomixer` VERA fork,
-40 M cycles, slot 2): FM on →
-title screen plus music with a peak sample around 13,900–14,500 (no clipping)
-and audible sub-500 Hz energy that `MUSIC.PSG` cannot produce; FM off → the same
-tune from `MUSIC.PSG`, peak 7,731, thin in the bass; slot 4 → the game boots and
-plays as well (verified from the `$C4xx` traffic in `VERA.log` and the matching
+40 M cycles, slot 2): FM on → title screen plus music with a peak sample around
+13,900–14,500 (no clipping) and full sub-500 Hz energy (≈0.30 of the spectrum);
+FM off → the same tune from `OTHELLO.PCM`, peak 11,040, with the bass restored
+(≈0.30, versus 0.04 for `MUSIC.PSG`) but band-limited above 4 kHz; slot 4 → the
+game boots and plays as well (verified from the `$C4xx` traffic in `VERA.log` and the matching
 audio envelope). Audio starts at ≈6.2 s of emulated time: ~3.0 s of `PLEASE
 WAIT` plus ~3.2 s of asset streaming.
 
@@ -395,10 +427,16 @@ WAIT` plus ~3.2 s of asset streaming.
   seconds between `BRUN` and the title screen — the `STARTUP` splash prints
   `INITIALIZING... PLEASE WAIT ...` for ~3 s before that, so the total from
   boot to title is ≈6 s of emulated time.
-* Both music streams are streamed from disk 512 bytes at a time, so `MUSIC.VZM`
-  costs 388 blocks and `MUSIC.PSG` 309; the 800 KB volume still has 677 blocks
-  free after both are installed. The streaming uses two 512-byte buffers (A at
-  `$0C00`, B in `.bss`) with the next record prefetched during the frame.
+* `MUSIC.VZM` (388 blocks) and `MUSIC.PSG` (309) are streamed from disk 512
+  bytes at a time, using two 512-byte buffers (A at `$0C00`, B in `.bss`) with
+  the next record prefetched during the frame. `OTHELLO.PCM` (2,271 blocks) is
+  streamed by raw block reads instead, because the file-level cost (22.7 ms per
+  call) would starve the FIFO. The 1700 KB volume has 186 blocks free with all
+  three installed.
+* The image no longer fits an 800 KB floppy: `OTHELLO.PCM` alone is
+  1,162,243 B. That is the accepted trade-off for a soundtrack with real bass
+  on machines without the FM daughterboard — `MUSIC.PSG` remains as a small
+  fallback if `OTHELLO.PCM` is missing from a copied installation.
 * The game runs at ≈58–59 fps with an Apple Mouse Card and ≈59.5 fps without,
   because music tempo is tied to VSYNC. Playing 2 % slow is inaudible; there is
   no separate timer to drift against.

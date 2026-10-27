@@ -335,6 +335,17 @@ user can see which build behaviour they are getting. The BASIC probe writes
 `$C200/$C201` and reads `$C220/$C221` (slot 4: `$C400/$C401` / `$C420/$C421`) and
 restores `$C200/$C201`.
 
+**The polarity of the BASIC flag is the opposite of the C one.** `STARTUP` starts
+with `F = 1` (*assume a chip is fitted*) and clears it to 0 only when the reads
+come back as `$5A/$A5` — which is the **aliasing** case, i.e. **no chip**. So
+`F = 1` means "FM present", and the branch that prints the FOUND lines must test
+`IF F = 1`. Testing `F = 0` there inverts both lines: an FM machine reports
+`NO YM2151` + `PCM MUSIC STREAMING` while actually playing `MUSIC.VZM`, and a
+no-FM machine reports `FM CHIP FOUND` + `PSG + FM` while playing `OTHELLO.PCM`.
+That is a banner-only bug — the audio path comes from the C probe, which is
+independent — and it is easy to miss precisely because the music sounds right.
+See §7 #34 for the fix and the text-page read-back that proves it.
+
 **The no-FM line is a file probe, not an assumption.** `STARTUP` used to print
 `PSG MUSIC ONLY` on every no-FM machine, which the port had already outgrown: the
 normal no-FM path is the pre-rendered `OTHELLO.PCM` (§3.11.1). It now prints
@@ -348,7 +359,8 @@ file when the caller supplies no access byte, which is exactly what
   (`$0300` = `JSR $BF00 / .byte $C8 / .word $0330 / STA $0320 / ...`, `$0310` =
   the same shape for `CLOSE` `$CC`), following the **inline** MLI convention: the
   command byte and the parameter-block word sit directly after the `JSR`, and MLI
-  returns to `ret+3`. A/X/Y-based calls are wrong (§7.x on page 3).
+  returns to `ret+3`. A/X/Y-based calls are wrong — the layout and the
+  `ret+4` resume arithmetic the harness relies on are in §5.2.
 - `$0330` = `count 3`, path pointer, I/O buffer pointer `$7000` (free until the
   payload loads), ref out. The pathname is a Pascal string at `$0340`.
 - Two attempts, both read-only: the absolute path `/CX16.OTHELLO/OTHELLO.PCM`
@@ -760,7 +772,8 @@ ProDOS STARTUP (Applesoft, 2,538 B, type $FC, aux $0801)
   → read-only MLI OPEN/CLOSE probe of OTHELLO.PCM (absolute, then prefix-relative)
   → probes VERA at slot 2 ($C200), then slot 4 ($C400) by write/read-back
   → probes the YM2151 at $Cx20/$Cx21 and PRINTs the STATUS + music-source lines
-    ("PCM MUSIC STREAMING", or "PSG MUSIC ONLY - NO PCM FILE" when the OPEN failed)
+    ("PSG + FM MUSIC ENABLED" when the chip is present, otherwise "PCM MUSIC
+     STREAMING", or "PSG MUSIC ONLY - NO PCM FILE" when the OPEN failed)
   → PRINTs "INITIALIZING... PLEASE WAIT ..." and waits ~3 s (180 VSYNC edges)
   → PRINTs "RUNNING CX16-OTHELLO ..."
   → BRUN MAIN.BIN  (slot 2)  or  MAIN4.BIN (slot 4)
@@ -1026,6 +1039,30 @@ observed with the shipping build, and `STARTUP`'s BASIC probe prints the same
 verdict on screen before `BRUN`. Temporary debug writes must be removed again —
 they cost payload bytes and are easy to forget.
 
+Reading the launcher's banner back — **this is what caught the inverted FM
+verdict (§7 #34)**, and it is the only way to check the text without a screenshot:
+a `-DVERA_DEBUG_STATS` build copies the Applesoft text page (`$0400-$07FF`) into
+bank-1 VRAM from `main.c`, right after `audio_start_music()`, and `-vera-dump`
+then exposes it at file offset `0x1C000` (24 rows × 40 columns, `char | $80`):
+
+```python
+page = open('run.vram', 'rb').read()[0x1C000:0x1C000 + 960]
+rows = [''.join(chr(b & 0x7F) for b in page[r*40:r*40+40]) for r in range(24)]
+print('\n'.join(rows))
+```
+
+Two caveats, both measured: (a) VRAM is not blank at `$1C000` — AppleWin
+pre-fills it with a ramp (`00 07 0e 15 1c …` at every `$1000` page start), so pick
+a region your own writes cover, and do not read "unwritten" areas as data; (b)
+the copy leaves 8 bytes of that pre-fill at the end of every 128-byte block, so
+the captured page is shifted relative to the real screen — rows 3, 9, 12 and 16
+read correctly in the FM = 1 run and the two `STATUS:` lines plus the music line
+come out verbatim, but do **not** trust column positions. Grep for complete lines
+(`STATUS: YM2151 (OPM) FM CHIP FOUND`, `PSG + FM MUSIC ENABLED`,
+`PCM MUSIC STREAMING`, `PSG MUSIC ONLY - NO PCM FILE`), never for a fixed offset.
+Shipping builds have no capture block (it is inside the `#ifdef`), so this costs
+nothing in the released payload.
+
 ---
 
 ## 🧪 6. Test Suite
@@ -1244,6 +1281,41 @@ were verified after the conversion.
     is. The first attempt therefore set the sticky `io_error` and the boot ended
     on the disk-error screen. Fixed by returning `$4C` from the EOF branch
     without touching `io_error`.
+33. **Launcher banner claims the wrong music mode** — reported as "PSG MUSIC ONLY
+    => 你不是改成 PCM 了嗎?". The no-FM line was still the pre-PCM wording, so a
+    normal no-FM machine announced the last-resort fallback it would never use.
+    `STARTUP` now derives the verdict from the card and the volume: a read-only
+    MLI `OPEN($C8)`/`CLOSE($CC)` pair issued from page-3 stubs tests
+    `OTHELLO.PCM` (absolute `/CX16.OTHELLO/...` path first, then the current
+    prefix) before `BRUN`, and `P` selects `PCM MUSIC STREAMING` or
+    `PSG MUSIC ONLY - NO PCM FILE`. Measured on AppleWin: PCM image → `$00`,
+    banner says PCM; 800 KB no-PCM image → `$40` on both attempts, banner shows
+    the fallback, and the failed `OPEN` leaves the boot untouched (title screen
+    reached, `MUSIC.PSG` audible, WAV max 8,176). The probe adds ≈0.3 s to boot
+    (6.78 s → 7.10 s to first audio), and `STARTUP` grew to 2,538 B / 5 blocks,
+    so §4.2, §4.3 and §5.7.2 were refreshed with it.
+34. **Launcher FM verdict printed backwards** — reported as "你是不是顯示反了, 有FM
+    應該是 PSG+FM, 沒FM才是 PCM Streaming", then "你是 FM 有開時, 顯示沒偵測到
+    (但遊戲是用FM播放); 沒開FM時, 你顯示有偵測到". Exactly right, and it was the
+    BASIC flag polarity, not the probe: `STARTUP` keeps `F` at 1 while the
+    `$C220/$C221` read-back does **not** alias `$5A/$A5`, i.e. `F = 1` means
+    *chip present* — but the branch to the FOUND lines tested `IF F = 0`. So an
+    FM machine announced `STATUS: NO YM2151` + `PCM MUSIC STREAMING` while
+    `MUSIC.VZM` was playing, and a no-FM machine announced `FM CHIP FOUND` +
+    `PSG + FM` while streaming `OTHELLO.PCM`. One byte, line 72:
+    `IF F = 0 THEN GOTO 76` → `IF F = 1 THEN GOTO 76`; `STARTUP` stays 2,538 B /
+    5 blocks, 185 blocks free, and the audio path is untouched (it comes from the
+    independent C probe). Verified by reading the *text* back, not the flags: a
+    `-DVERA_DEBUG_STATS` build copies `$0400-$07FF` to bank-1 `$1C000` and
+    `-vera-dump` decodes it (§5.7.4) — FM = 1 → `STATUS: YM2151 (OPM) FM CHIP
+    FOUND` / `PSG + FM MUSIC ENABLED`; FM = 0 → `STATUS: NO YM2151 (OPM) FM CHIP`
+    / `PCM MUSIC STREAMING`. The shipping image was then re-run end to end on
+    AppleWin (40 M cycles, slot 2): both settings still reach the identical title
+    screen (layer-0 map all tile 1, 129 non-zero layer-1 entries, palette
+    `00 00 ff 0f`), and the WAV still separates the paths — FM = 1 first audible
+    6.96 s, peak 15,641; FM = 0 7.11 s, peak 11,040 (§5.7.2). Lesson: the banner
+    is part of the product, so verifying a probe means reading the bytes it
+    printed — the music was always right, which is exactly why nobody noticed.
 
 ---
 
@@ -1263,6 +1335,11 @@ were verified after the conversion.
   ceiling, not the `0x8800` linker region. The PCM block map costs 1 KB of it
   (`pcm_master` + `pcm_index`, 256-aligned) and the `.bss` half of the music
   double buffer another 512 B.
+- **Boot to title is ≈7 s of emulated time**: ~0.3 s for the launcher's
+  `OTHELLO.PCM` OPEN probe, 3.0 s for the `PLEASE WAIT` splash, and the rest is
+  the 42,912-byte asset stream into VRAM (≈600 k cycles). That is the honest
+  floor without moving asset loading off the critical path; do not shorten the
+  splash without re-measuring, it is what hides the VRAM fill.
 - **Music tempo is the frame rate** for the PSG/FM streams. One VSYNC edge =
   one stream tick, so the song plays 2 % slow while the game runs at 58.3 fps
   (Mouse Card fitted) and on tempo at 59.5 fps. The **PCM** soundtrack has its

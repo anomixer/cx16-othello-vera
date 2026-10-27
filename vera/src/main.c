@@ -56,6 +56,27 @@ int main(void) {
     audio_start_music();
     if (disk_error()) disk_error_screen();
 
+#ifdef VERA_DEBUG_STATS
+    /* Capture the Applesoft launcher's text page ($0400-$07FF, 24 rows of 40)
+     * into bank-1 VRAM at $1C000.  STARTUP runs before BRUN and its banner is
+     * still in RAM here, so AppleWin's -vera-dump then shows exactly which
+     * STATUS / music-source lines the shipped launcher printed instead of us
+     * having to reason about the probe polarity.  Read whole lines out of it
+     * (grep for "STATUS:" / "PSG + FM" / "PCM MUSIC"): AppleWin pre-fills VRAM
+     * with a ramp and the read-back leaves 8 bytes of it at the end of every
+     * 128-byte block, so the captured page is shifted and the column positions
+     * are not the real screen's.  Debug builds only: the shipping image is
+     * compiled without -DVERA_DEBUG_STATS. */
+    {
+        vera_set_addr(VERA_INC_BANK1, 0xC000);
+        for (uint8_t row = 0; row < 24u; ++row) {
+            const volatile uint8_t *line = (const volatile uint8_t *)(0x0400u + 40u * row);
+            for (uint8_t col = 0; col < 40u; ++col)
+                VERA.data0 = line[col];
+        }
+    }
+#endif
+
     for (;;) {
         while (gamestate == GAME_MENU) {
             clear_screen();
